@@ -44,4 +44,4 @@ TTS_VOICES = {
     "zh": "nova",
 }
 
-RECALL_API_BASE = "https://us1.recall.ai/api/v1"
+RECALL_API_BASE = "https://eu-central-1.recall.ai/api/v1"

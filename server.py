@@ -91,24 +91,23 @@ async def handler(ws: ServerConnection) -> None:
             event = msg.get("event")
             data = msg.get("data", {})
 
-            # Recall.ai sends a bot_id in the initial handshake
-            if "bot_id" in msg and bot_id is None:
-                bot_id = msg["bot_id"]
+            # Extract bot_id from the message envelope
+            bot_data = (data.get("bot") or {})
+            if bot_data.get("id") and bot_id is None:
+                bot_id = bot_data["id"]
                 log.info("Bot ID set: %s", bot_id)
 
-            if "bot_id" in data and bot_id is None:
-                bot_id = data["bot_id"]
-                log.info("Bot ID set: %s", bot_id)
-
-            if event == "audio.data" or event == "audio_raw.data":
-                participant_id = str(data.get("participant_id", "unknown"))
-                participant_name = data.get("participant_name", "")
+            if event == "audio_separate_raw.data":
+                inner = data.get("data", {})
+                participant = inner.get("participant", {})
+                participant_id = str(participant.get("id", "unknown"))
+                participant_name = participant.get("name", "")
 
                 # Skip the bot's own audio to avoid feedback loops
                 if participant_name == BOT_PARTICIPANT_NAME:
                     continue
 
-                audio_b64 = data.get("data", "")
+                audio_b64 = inner.get("buffer", "")
                 if not audio_b64:
                     continue
 
@@ -116,15 +115,12 @@ async def handler(ws: ServerConnection) -> None:
                 stream = await get_or_create_asr(participant_id)
                 await stream.send_audio(pcm_bytes)
 
-            elif event == "participant.leave":
-                participant_id = str(data.get("participant_id", ""))
+            elif event == "participant_events.leave":
+                inner = data.get("data", {})
+                participant_id = str(inner.get("participant", {}).get("id", ""))
                 if participant_id:
                     log.info("Participant left: %s", participant_id)
                     await remove_asr(participant_id)
-
-            elif event == "bot.status_change":
-                status = data.get("status", {})
-                log.info("Bot status: %s", status)
 
             else:
                 log.debug("Unhandled event: %s", event)

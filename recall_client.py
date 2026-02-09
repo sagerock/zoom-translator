@@ -26,19 +26,15 @@ async def create_bot(meeting_url: str, websocket_url: str) -> str:
     payload = {
         "meeting_url": meeting_url,
         "bot_name": "Translator Bot",
-        "real_time_media": {
-            "websocket_audio_output_url": websocket_url,
-            "websocket_video_output_url": None,
-        },
-        "transcription_options": {
-            "provider": "meeting_captions",
-        },
-        "recording_mode": "audio_only",
-        "recording_mode_options": {
-            "participant_audio_streams": {
-                "enabled": True,
-                "format": "s16le_16khz_mono",
-            },
+        "recording_config": {
+            "audio_separate_raw": {},
+            "realtime_endpoints": [
+                {
+                    "type": "websocket",
+                    "url": websocket_url,
+                    "events": ["audio_separate_raw.data"],
+                }
+            ],
         },
     }
 
