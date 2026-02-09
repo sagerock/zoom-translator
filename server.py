@@ -232,12 +232,12 @@ async def listen_handler(ws: ServerConnection) -> None:
         log.info("Listener disconnected for lang=%s (%d remaining)", lang, remaining)
 
 
-async def broadcast_audio(lang: str, mp3_b64: str) -> None:
+async def broadcast_audio(lang: str, mp3_b64: str, original: str = "", translated: str = "") -> None:
     """Send an MP3 audio clip to all listener browsers for a language."""
     clients = listener_clients.get(lang, set())
     if not clients:
         return
-    msg = json.dumps({"type": "audio", "mp3": mp3_b64})
+    msg = json.dumps({"type": "audio", "mp3": mp3_b64, "original": original, "translated": translated})
     stale = set()
     for ws in clients:
         try:
@@ -258,7 +258,7 @@ def make_on_utterance(session: BotSession):
             return
 
         mp3_b64 = await synthesize(translated, target_lang)
-        await broadcast_audio(target_lang, mp3_b64)
+        await broadcast_audio(target_lang, mp3_b64, original=text, translated=translated)
 
     return on_utterance
 

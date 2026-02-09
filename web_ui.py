@@ -284,6 +284,14 @@ LISTEN_PAGE = """\
     font-size: .95rem; color: #666; min-height: 1.5rem;
   }
   .activity.playing { color: #2ecc71; font-weight: 600; }
+  .subtitle {
+    font-size: 1.15rem; font-weight: 600; color: #1a1a2e;
+    margin-bottom: .4rem; min-height: 1.5rem;
+  }
+  .original {
+    font-size: .85rem; color: #888; font-style: italic;
+    margin-bottom: 1.2rem; min-height: 1.2rem;
+  }
   .clip-count {
     font-size: .8rem; color: #999; margin-top: 1rem;
   }
@@ -303,6 +311,8 @@ LISTEN_PAGE = """\
   <button class="start-btn" id="start-btn">Start Listening</button>
   <div class="hidden" id="live-area">
     <div class="status-badge connecting" id="status">Connecting...</div>
+    <div class="subtitle" id="subtitle"></div>
+    <div class="original" id="original"></div>
     <div class="activity" id="activity">Waiting for translation...</div>
     <div class="clip-count" id="clip-count"></div>
   </div>
@@ -321,6 +331,8 @@ LISTEN_PAGE = """\
   var startBtn = document.getElementById("start-btn");
   var liveArea = document.getElementById("live-area");
   var statusEl = document.getElementById("status");
+  var subtitleEl = document.getElementById("subtitle");
+  var originalEl = document.getElementById("original");
   var activityEl = document.getElementById("activity");
   var clipCountEl = document.getElementById("clip-count");
 
@@ -350,8 +362,11 @@ LISTEN_PAGE = """\
     activityEl.textContent = "Playing...";
     activityEl.className = "activity playing";
 
-    var mp3b64 = queue.shift();
-    var audio = new Audio("data:audio/mp3;base64," + mp3b64);
+    var item = queue.shift();
+    subtitleEl.textContent = item.translated;
+    originalEl.textContent = item.original;
+
+    var audio = new Audio("data:audio/mp3;base64," + item.mp3);
     audio.onended = function() {
       clipsPlayed++;
       clipCountEl.textContent = clipsPlayed + " clip" + (clipsPlayed === 1 ? "" : "s") + " played";
@@ -365,8 +380,8 @@ LISTEN_PAGE = """\
     });
   }
 
-  function enqueue(mp3b64) {
-    queue.push(mp3b64);
+  function enqueue(item) {
+    queue.push(item);
     if (!playing) playNext();
   }
 
@@ -399,7 +414,7 @@ LISTEN_PAGE = """\
       var msg;
       try { msg = JSON.parse(ev.data); } catch(e) { return; }
       if (msg.type === "audio" && msg.mp3) {
-        enqueue(msg.mp3);
+        enqueue({mp3: msg.mp3, translated: msg.translated || "", original: msg.original || ""});
       }
     };
   }
