@@ -11,7 +11,9 @@ import base64
 import json
 import logging
 import signal
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, parse_qs
 
@@ -35,6 +37,9 @@ log = logging.getLogger(__name__)
 
 # ── Per-bot session state ──────────────────────────────────────────────
 
+RECORDINGS_DIR = Path(__file__).parent / "recordings"
+
+
 @dataclass
 class BotSession:
     bot_id: str
@@ -43,6 +48,10 @@ class BotSession:
     target_lang: str
     status: str = "starting"  # starting | in_call | stopped
     asr_streams: dict[str, ASRStream] = field(default_factory=dict)
+    recording_dir: Path | None = None
+    recording_start: float = 0.0
+    clip_count: int = 0
+    audio_offset: float = 0.0  # cumulative audio seconds for SRT timing
 
 
 # bot_id → BotSession
@@ -81,6 +90,37 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response = connection.respond(200, "ok")
         return response
 
+    # Download recordings: /recordings/<bot_id>/<filename>
+    if request.path.startswith("/recordings/"):
+        parts = request.path.strip("/").split("/")
+        if len(parts) == 3:
+            bot_id, filename = parts[1], parts[2]
+            rec_dir = RECORDINGS_DIR / bot_id
+            # Serve concatenated audio on-the-fly
+            if filename == "full_audio.mp3" and rec_dir.is_dir():
+                data = _build_full_audio(rec_dir)
+                if data:
+                    response = connection.respond(200, data)
+                    response.headers["Content-Type"] = "audio/mpeg"
+                    response.headers["Content-Disposition"] = (
+                        f'attachment; filename="{bot_id[:8]}_translation.mp3"'
+                    )
+                    return response
+            # Serve SRT / transcript directly
+            file_path = (rec_dir / filename).resolve()
+            if file_path.parent == rec_dir.resolve() and file_path.is_file():
+                ct_map = {".srt": "text/plain; charset=utf-8",
+                          ".jsonl": "application/json; charset=utf-8"}
+                ct = ct_map.get(file_path.suffix, "application/octet-stream")
+                data = file_path.read_bytes()
+                response = connection.respond(200, data)
+                response.headers["Content-Type"] = ct
+                response.headers["Content-Disposition"] = (
+                    f'attachment; filename="{bot_id[:8]}_{filename}"'
+                )
+                return response
+        return connection.respond(404, "Not Found")
+
     # Unknown non-WebSocket request
     return connection.respond(404, "Not Found")
 
@@ -95,6 +135,7 @@ def _sessions_snapshot() -> list[dict]:
             "source_lang": s.source_lang,
             "target_lang": s.target_lang,
             "status": s.status,
+            "clip_count": s.clip_count,
         }
         for s in bot_sessions.values()
     ]
@@ -171,6 +212,7 @@ async def _handle_start(ws: ServerConnection, msg: dict) -> None:
                 status="in_call",
             )
             bot_sessions[bot_id] = session
+            _init_recording(session)
             log.info("Started bot %s for %s → %s", bot_id, source_lang, target_lang)
         except Exception as e:
             log.exception("Failed to create bot for %s", target_lang)
@@ -247,6 +289,74 @@ async def broadcast_audio(lang: str, mp3_b64: str, original: str = "", translate
     clients.difference_update(stale)
 
 
+# ── Recording ─────────────────────────────────────────────────────────
+
+def _init_recording(session: BotSession) -> None:
+    rec_dir = RECORDINGS_DIR / session.bot_id
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    session.recording_dir = rec_dir
+    session.recording_start = time.time()
+    log.info("Recording to %s", rec_dir)
+
+
+def _format_srt_time(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0.0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def save_recording(session: BotSession, mp3_b64: str, original: str, translated: str) -> None:
+    if not session.recording_dir:
+        return
+
+    mp3_bytes = base64.b64decode(mp3_b64)
+    session.clip_count += 1
+    n = session.clip_count
+
+    # Save individual clip
+    clip_path = session.recording_dir / f"clip_{n:04d}.mp3"
+    clip_path.write_bytes(mp3_bytes)
+
+    # Estimate clip duration (~64 kbps = 8000 bytes/sec)
+    duration = len(mp3_bytes) / 8000.0
+    start = session.audio_offset
+    session.audio_offset += duration
+
+    # Append to SRT (timed to concatenated audio)
+    srt_path = session.recording_dir / "subtitles.srt"
+    with open(srt_path, "a", encoding="utf-8") as f:
+        f.write(f"{n}\n")
+        f.write(f"{_format_srt_time(start)} --> {_format_srt_time(session.audio_offset)}\n")
+        f.write(f"{translated}\n\n")
+
+    # Append to transcript (JSONL with wall-clock timestamp)
+    transcript_path = session.recording_dir / "transcript.jsonl"
+    elapsed = time.time() - session.recording_start
+    entry = {
+        "n": n,
+        "elapsed": round(elapsed, 2),
+        "audio_start": round(start, 2),
+        "audio_end": round(session.audio_offset, 2),
+        "original": original,
+        "translated": translated,
+    }
+    with open(transcript_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _build_full_audio(rec_dir: Path) -> bytes:
+    """Concatenate all clip MP3s into one file."""
+    clips = sorted(rec_dir.glob("clip_*.mp3"))
+    chunks = []
+    for clip in clips:
+        chunks.append(clip.read_bytes())
+    return b"".join(chunks)
+
+
 # ── Pipeline callback chain (per-session) ─────────────────────────────
 
 def make_on_utterance(session: BotSession):
@@ -259,6 +369,7 @@ def make_on_utterance(session: BotSession):
 
         mp3_b64 = await synthesize(translated, target_lang)
         await broadcast_audio(target_lang, mp3_b64, original=text, translated=translated)
+        save_recording(session, mp3_b64, text, translated)
 
     return on_utterance
 
@@ -303,6 +414,7 @@ async def recall_handler(ws: ServerConnection) -> None:
                             status="in_call",
                         )
                         bot_sessions[incoming_bot_id] = session
+                        _init_recording(session)
                         await broadcast_status()
 
             if event == "audio_separate_raw.data":

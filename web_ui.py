@@ -59,6 +59,12 @@ HTML_PAGE = """\
     font-size: .75rem; color: #4361ee; font-family: monospace;
     word-break: break-all; margin-top: .3rem;
   }
+  .dl-links { margin-top: .3rem; }
+  .dl-links a {
+    font-size: .75rem; color: #6c757d; margin-right: .8rem;
+    text-decoration: none;
+  }
+  .dl-links a:hover { color: #4361ee; text-decoration: underline; }
   .status-dot {
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     margin-right: .4rem;
@@ -193,6 +199,16 @@ HTML_PAGE = """\
       var b = bots[i];
       var shortId = b.bot_id.substring(0, 8);
       var url = listenUrl(b.target_lang);
+      var recBase = "/recordings/" + b.bot_id + "/";
+      var dlHtml = "";
+      if (b.clip_count > 0) {
+        dlHtml = '<div class="dl-links">' +
+          '<a href="' + recBase + 'full_audio.mp3" download>Audio MP3</a>' +
+          '<a href="' + recBase + 'subtitles.srt" download>Subtitles SRT</a>' +
+          '<a href="' + recBase + 'transcript.jsonl" download>Transcript</a>' +
+          '(' + b.clip_count + ' clips)' +
+        '</div>';
+      }
       html += '<div class="bot-row">' +
         '<div class="bot-info">' +
           '<span class="status-dot ' + b.status + '"></span>' +
@@ -200,6 +216,7 @@ HTML_PAGE = """\
           '<span class="bot-id">' + shortId + '</span> ' +
           '<span>' + b.status + '</span>' +
           '<div class="listen-url">' + url + '</div>' +
+          dlHtml +
         '</div>' +
         '<div>' +
           '<button class="copy-link" data-url="' + url + '">Copy Link</button>' +
