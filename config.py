@@ -15,6 +15,9 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 WEBSOCKET_HOST = os.getenv("WEBSOCKET_HOST", "0.0.0.0")
 WEBSOCKET_PORT = int(os.getenv("PORT", os.getenv("WEBSOCKET_PORT", "8765")))
 
+# Public WebSocket URL (used when telling Recall.ai where to connect back)
+PUBLIC_WSS_URL = os.getenv("PUBLIC_WSS_URL", f"ws://localhost:{WEBSOCKET_PORT}")
+
 # Translation defaults
 TARGET_LANGUAGE = os.getenv("TARGET_LANGUAGE", "en")
 

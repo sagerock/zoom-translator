@@ -15,7 +15,7 @@ import config
 log = logging.getLogger(__name__)
 
 
-async def create_bot(meeting_url: str, websocket_url: str) -> str:
+async def create_bot(meeting_url: str, websocket_url: str, bot_name: str = "Translator Bot") -> str:
     """Deploy a Recall.ai bot to *meeting_url*.
 
     The bot streams per-participant audio to *websocket_url* over WebSocket.
@@ -31,7 +31,7 @@ async def create_bot(meeting_url: str, websocket_url: str) -> str:
 
     payload = {
         "meeting_url": meeting_url,
-        "bot_name": "Translator Bot",
+        "bot_name": bot_name,
         "recording_config": {
             "audio_separate_raw": {},
             "realtime_endpoints": [

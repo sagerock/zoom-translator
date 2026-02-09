@@ -22,15 +22,17 @@ log = logging.getLogger(__name__)
 class ASRStream:
     """Wraps a single Deepgram streaming connection for one participant."""
 
-    def __init__(self, participant_id: str, on_utterance: Callable[[str, str], Awaitable[None]]):
+    def __init__(self, participant_id: str, on_utterance: Callable[[str, str], Awaitable[None]], source_lang: str = "es"):
         """
         Args:
             participant_id: Identifier for this audio stream.
             on_utterance: async callback(participant_id, text) fired on each
                           finalized utterance.
+            source_lang: 2-letter language code for Deepgram transcription.
         """
         self.participant_id = participant_id
         self._on_utterance = on_utterance
+        self._source_lang = source_lang
         self._dg = AsyncDeepgramClient(api_key=config.DEEPGRAM_API_KEY)
         self._socket = None
         self._ctx = None
@@ -39,7 +41,7 @@ class ASRStream:
     async def start(self) -> None:
         self._ctx = self._dg.listen.v1.connect(
             model="nova-2",
-            language="es",
+            language=self._source_lang,
             punctuate="true",
             interim_results="false",
             encoding="linear16",
