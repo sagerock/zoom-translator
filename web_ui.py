@@ -1,4 +1,9 @@
-"""Single-page web UI served as an HTML string constant."""
+"""Single-page web UI served as an HTML string constant.
+
+Exports:
+  HTML_PAGE   – management UI (admin starts/stops bots)
+  LISTEN_PAGE – listener page (attendees hear translated audio)
+"""
 
 HTML_PAGE = """\
 <!DOCTYPE html>
@@ -44,6 +49,16 @@ HTML_PAGE = """\
     border-radius: 4px; font-size: .8rem; cursor: pointer;
   }
   button.stop:hover { background: #c0392b; }
+  button.copy-link {
+    background: #6c757d; color: #fff; border: none; padding: .35rem .8rem;
+    border-radius: 4px; font-size: .8rem; cursor: pointer; margin-right: .4rem;
+  }
+  button.copy-link:hover { background: #5a6268; }
+  button.copy-link.copied { background: #2ecc71; }
+  .listen-url {
+    font-size: .75rem; color: #4361ee; font-family: monospace;
+    word-break: break-all; margin-top: .3rem;
+  }
   .status-dot {
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     margin-right: .4rem;
@@ -164,6 +179,10 @@ HTML_PAGE = """\
     setTimeout(function() { div.remove(); }, 6000);
   }
 
+  function listenUrl(lang) {
+    return location.protocol + "//" + location.host + "/listen?lang=" + lang;
+  }
+
   function renderBots(bots) {
     if (!bots || bots.length === 0) {
       botList.innerHTML = '<div class="empty">No active bots</div>';
@@ -173,14 +192,19 @@ HTML_PAGE = """\
     for (var i = 0; i < bots.length; i++) {
       var b = bots[i];
       var shortId = b.bot_id.substring(0, 8);
+      var url = listenUrl(b.target_lang);
       html += '<div class="bot-row">' +
         '<div class="bot-info">' +
           '<span class="status-dot ' + b.status + '"></span>' +
           '<strong>' + b.source_lang.toUpperCase() + ' &rarr; ' + b.target_lang.toUpperCase() + '</strong> ' +
           '<span class="bot-id">' + shortId + '</span> ' +
           '<span>' + b.status + '</span>' +
+          '<div class="listen-url">' + url + '</div>' +
         '</div>' +
-        '<button class="stop" data-id="' + b.bot_id + '">Stop</button>' +
+        '<div>' +
+          '<button class="copy-link" data-url="' + url + '">Copy Link</button>' +
+          '<button class="stop" data-id="' + b.bot_id + '">Stop</button>' +
+        '</div>' +
       '</div>';
     }
     botList.innerHTML = html;
@@ -190,6 +214,18 @@ HTML_PAGE = """\
       stopBtns[j].addEventListener("click", function() {
         var botId = this.getAttribute("data-id");
         ws.send(JSON.stringify({ action: "stop", bot_id: botId }));
+      });
+    }
+
+    var copyBtns = botList.querySelectorAll("button.copy-link");
+    for (var k = 0; k < copyBtns.length; k++) {
+      copyBtns[k].addEventListener("click", function() {
+        var btn = this;
+        navigator.clipboard.writeText(btn.getAttribute("data-url")).then(function() {
+          btn.textContent = "Copied!";
+          btn.classList.add("copied");
+          setTimeout(function() { btn.textContent = "Copy Link"; btn.classList.remove("copied"); }, 2000);
+        });
       });
     }
   }
@@ -210,6 +246,149 @@ HTML_PAGE = """\
       target_langs: targets
     }));
   });
+
+  connect();
+})();
+</script>
+</body>
+</html>
+"""
+
+
+LISTEN_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Translation Listener</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f5; color: #333;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh;
+  }
+  .container { text-align: center; max-width: 400px; padding: 2rem; }
+  h1 { font-size: 1.4rem; margin-bottom: .5rem; color: #1a1a2e; }
+  .lang { font-size: 1.1rem; color: #4361ee; margin-bottom: 1.5rem; }
+  .status-badge {
+    display: inline-block; padding: .35rem 1rem; border-radius: 20px;
+    font-size: .85rem; font-weight: 600; margin-bottom: 1.5rem;
+  }
+  .status-badge.connected { background: #d4edda; color: #155724; }
+  .status-badge.disconnected { background: #f8d7da; color: #721c24; }
+  .status-badge.connecting { background: #fff3cd; color: #856404; }
+  .activity {
+    font-size: .95rem; color: #666; min-height: 1.5rem;
+  }
+  .activity.playing { color: #2ecc71; font-weight: 600; }
+  .clip-count {
+    font-size: .8rem; color: #999; margin-top: 1rem;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Translation Listener</h1>
+  <div class="lang" id="lang-label"></div>
+  <div class="status-badge connecting" id="status">Connecting...</div>
+  <div class="activity" id="activity">Waiting for translation...</div>
+  <div class="clip-count" id="clip-count"></div>
+</div>
+
+<script>
+(function() {
+  var LANG_NAMES = {
+    en: "English", es: "Spanish", fr: "French",
+    de: "German", pt: "Portuguese", ja: "Japanese", zh: "Chinese"
+  };
+
+  var params = new URLSearchParams(location.search);
+  var lang = params.get("lang") || "";
+  var langLabel = document.getElementById("lang-label");
+  var statusEl = document.getElementById("status");
+  var activityEl = document.getElementById("activity");
+  var clipCountEl = document.getElementById("clip-count");
+
+  langLabel.textContent = LANG_NAMES[lang] || lang.toUpperCase();
+
+  if (!lang) {
+    statusEl.textContent = "Error";
+    statusEl.className = "status-badge disconnected";
+    activityEl.textContent = "Missing ?lang= parameter in URL";
+    return;
+  }
+
+  var queue = [];
+  var playing = false;
+  var clipsPlayed = 0;
+
+  function playNext() {
+    if (queue.length === 0) {
+      playing = false;
+      activityEl.textContent = "Waiting for translation...";
+      activityEl.className = "activity";
+      return;
+    }
+    playing = true;
+    activityEl.textContent = "Playing...";
+    activityEl.className = "activity playing";
+
+    var mp3b64 = queue.shift();
+    var audio = new Audio("data:audio/mp3;base64," + mp3b64);
+    audio.onended = function() {
+      clipsPlayed++;
+      clipCountEl.textContent = clipsPlayed + " clip" + (clipsPlayed === 1 ? "" : "s") + " played";
+      playNext();
+    };
+    audio.onerror = function() {
+      playNext();
+    };
+    audio.play().catch(function() {
+      playNext();
+    });
+  }
+
+  function enqueue(mp3b64) {
+    queue.push(mp3b64);
+    if (!playing) playNext();
+  }
+
+  var ws = null;
+  var reconnectTimer = null;
+
+  function wsUrl() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return proto + "//" + location.host + "/listen?lang=" + encodeURIComponent(lang);
+  }
+
+  function connect() {
+    if (ws && ws.readyState <= 1) return;
+    ws = new WebSocket(wsUrl());
+
+    ws.onopen = function() {
+      statusEl.textContent = "Connected";
+      statusEl.className = "status-badge connected";
+    };
+
+    ws.onclose = function() {
+      statusEl.textContent = "Disconnected";
+      statusEl.className = "status-badge disconnected";
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+
+    ws.onerror = function() { ws.close(); };
+
+    ws.onmessage = function(ev) {
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch(e) { return; }
+      if (msg.type === "audio" && msg.mp3) {
+        enqueue(msg.mp3);
+      }
+    };
+  }
 
   connect();
 })();

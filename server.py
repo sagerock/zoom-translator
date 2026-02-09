@@ -13,6 +13,7 @@ import logging
 import signal
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse, parse_qs
 
 import websockets
 from websockets.asyncio.server import serve, ServerConnection
@@ -22,8 +23,8 @@ import config
 from pipeline.asr import ASRStream
 from pipeline.translator import translate
 from pipeline.tts import synthesize
-from recall_client import create_bot, stop_bot, send_audio
-from web_ui import HTML_PAGE
+from recall_client import create_bot, stop_bot
+from web_ui import HTML_PAGE, LISTEN_PAGE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +51,9 @@ bot_sessions: dict[str, BotSession] = {}
 # Connected management UI WebSocket clients
 mgmt_clients: set[ServerConnection] = set()
 
+# target_lang → set of WebSocket connections (listener browsers)
+listener_clients: dict[str, set[ServerConnection]] = {}
+
 
 # ── HTTP request handler (serves web UI) ──────────────────────────────
 
@@ -65,6 +69,11 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
 
     if request.path == "/" or request.path == "/index.html":
         response = connection.respond(200, HTML_PAGE)
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+        return response
+
+    if request.path.startswith("/listen"):
+        response = connection.respond(200, LISTEN_PAGE)
         response.headers["Content-Type"] = "text/html; charset=utf-8"
         return response
 
@@ -195,6 +204,49 @@ async def _handle_stop(ws: ServerConnection, msg: dict) -> None:
     bot_sessions.pop(bot_id, None)
 
 
+# ── Listener WebSocket handler (/listen) ──────────────────────────────
+
+async def listen_handler(ws: ServerConnection) -> None:
+    """Handle listener browser WebSocket connections."""
+    path = ws.request.path if ws.request else "/listen"
+    qs = parse_qs(urlparse(path).query)
+    lang = qs.get("lang", [""])[0].lower()
+
+    if not lang:
+        await ws.close(1008, "Missing ?lang= parameter")
+        return
+
+    if lang not in listener_clients:
+        listener_clients[lang] = set()
+    listener_clients[lang].add(ws)
+    log.info("Listener connected for lang=%s (%d total)", lang, len(listener_clients[lang]))
+
+    try:
+        async for _ in ws:
+            pass  # keep alive; listeners only receive, never send
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    finally:
+        listener_clients.get(lang, set()).discard(ws)
+        remaining = len(listener_clients.get(lang, set()))
+        log.info("Listener disconnected for lang=%s (%d remaining)", lang, remaining)
+
+
+async def broadcast_audio(lang: str, mp3_b64: str) -> None:
+    """Send an MP3 audio clip to all listener browsers for a language."""
+    clients = listener_clients.get(lang, set())
+    if not clients:
+        return
+    msg = json.dumps({"type": "audio", "mp3": mp3_b64})
+    stale = set()
+    for ws in clients:
+        try:
+            await ws.send(msg)
+        except Exception:
+            stale.add(ws)
+    clients.difference_update(stale)
+
+
 # ── Pipeline callback chain (per-session) ─────────────────────────────
 
 def make_on_utterance(session: BotSession):
@@ -206,7 +258,7 @@ def make_on_utterance(session: BotSession):
             return
 
         mp3_b64 = await synthesize(translated, target_lang)
-        await send_audio(session.bot_id, mp3_b64)
+        await broadcast_audio(target_lang, mp3_b64)
 
     return on_utterance
 
@@ -314,6 +366,8 @@ async def handler(ws: ServerConnection) -> None:
 
     if path == "/mgmt":
         await mgmt_handler(ws)
+    elif path.startswith("/listen"):
+        await listen_handler(ws)
     else:
         await recall_handler(ws)
 
