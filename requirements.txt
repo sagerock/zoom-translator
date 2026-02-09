@@ -1,0 +1,5 @@
+websockets>=12.0
+httpx>=0.27
+python-dotenv>=1.0
+deepgram-sdk>=3.4
+openai>=1.30
