@@ -23,6 +23,12 @@ async def create_bot(meeting_url: str, websocket_url: str) -> str:
     Returns:
         The bot ID.
     """
+    # Minimal silent MP3 (1 frame of silence) to enable output_audio endpoint
+    SILENT_MP3 = (
+        "//uQxAAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVV"
+        "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+    )
+
     payload = {
         "meeting_url": meeting_url,
         "bot_name": "Translator Bot",
@@ -35,6 +41,14 @@ async def create_bot(meeting_url: str, websocket_url: str) -> str:
                     "events": ["audio_separate_raw.data"],
                 }
             ],
+        },
+        "automatic_audio_output": {
+            "in_call_recording": {
+                "data": {
+                    "kind": "mp3",
+                    "b64_data": SILENT_MP3,
+                },
+            },
         },
     }
 
@@ -72,19 +86,19 @@ async def stop_bot(bot_id: str) -> None:
 
 
 async def send_audio(bot_id: str, mp3_base64: str) -> None:
-    """Play an MP3 clip into the Zoom meeting via Recall.ai Output Media API."""
+    """Play an MP3 clip into the Zoom meeting via Recall.ai Output Audio API."""
     headers = {
         "Authorization": f"Token {config.RECALL_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
         "kind": "mp3",
-        "data": mp3_base64,
+        "b64_data": mp3_base64,
     }
 
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
-            f"{config.RECALL_API_BASE}/bot/{bot_id}/output_media",
+            f"{config.RECALL_API_BASE}/bot/{bot_id}/output_audio",
             json=payload,
             headers=headers,
         )
