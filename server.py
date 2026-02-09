@@ -127,10 +127,12 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             rec_dir = RECORDINGS_DIR / bot_id
             # Serve concatenated audio on-the-fly
             if filename == "full_audio.mp3" and rec_dir.is_dir():
-                data = _build_full_audio(rec_dir)
-                if data:
-                    response = connection.respond(200, data)
+                body = _build_full_audio(rec_dir)
+                if body:
+                    response = connection.respond(200, "")
+                    response.body = body
                     response.headers["Content-Type"] = "audio/mpeg"
+                    response.headers["Content-Length"] = str(len(body))
                     response.headers["Content-Disposition"] = (
                         f'attachment; filename="{bot_id[:8]}_translation.mp3"'
                     )
@@ -141,8 +143,8 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                 ct_map = {".srt": "text/plain; charset=utf-8",
                           ".jsonl": "application/json; charset=utf-8"}
                 ct = ct_map.get(file_path.suffix, "application/octet-stream")
-                data = file_path.read_bytes()
-                response = connection.respond(200, data)
+                text = file_path.read_text(encoding="utf-8")
+                response = connection.respond(200, text)
                 response.headers["Content-Type"] = ct
                 response.headers["Content-Disposition"] = (
                     f'attachment; filename="{bot_id[:8]}_{filename}"'
