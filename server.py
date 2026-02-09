@@ -54,7 +54,15 @@ mgmt_clients: set[ServerConnection] = set()
 # ── HTTP request handler (serves web UI) ──────────────────────────────
 
 async def process_request(connection: ServerConnection, request: Request) -> Response | None:
-    """Intercept HTTP requests to serve the web UI page."""
+    """Intercept HTTP requests to serve the web UI page.
+
+    WebSocket upgrade requests (from Recall.ai bots or the management UI)
+    are passed through by returning None.
+    """
+    # Let any WebSocket upgrade through immediately
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return None
+
     if request.path == "/" or request.path == "/index.html":
         response = connection.respond(200, HTML_PAGE)
         response.headers["Content-Type"] = "text/html; charset=utf-8"
@@ -64,8 +72,8 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response = connection.respond(200, "ok")
         return response
 
-    # All other paths: let WebSocket handshake proceed
-    return None
+    # Unknown non-WebSocket request
+    return connection.respond(404, "Not Found")
 
 
 # ── Management WebSocket broadcast ────────────────────────────────────
