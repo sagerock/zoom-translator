@@ -127,6 +127,11 @@ HTML_PAGE = """\
     <label>Active Bots</label>
     <div id="bot-list"><div class="empty">No active bots</div></div>
   </div>
+
+  <div class="card">
+    <label>Recordings</label>
+    <div id="rec-list"><div class="empty">No recordings yet</div></div>
+  </div>
 </div>
 
 <script>
@@ -135,6 +140,7 @@ HTML_PAGE = """\
   const urlInput  = document.getElementById("meeting-url");
   const sourceSel = document.getElementById("source-lang");
   const botList   = document.getElementById("bot-list");
+  const recList   = document.getElementById("rec-list");
   const connEl    = document.getElementById("conn-status");
   const errorsEl  = document.getElementById("errors");
 
@@ -264,7 +270,45 @@ HTML_PAGE = """\
     }));
   });
 
+  function formatDuration(sec) {
+    if (!sec) return "";
+    var m = Math.floor(sec / 60);
+    var s = Math.round(sec % 60);
+    return m > 0 ? m + "m " + s + "s" : s + "s";
+  }
+
+  function loadRecordings() {
+    fetch("/api/recordings").then(function(r) { return r.json(); }).then(function(recs) {
+      if (!recs || recs.length === 0) {
+        recList.innerHTML = '<div class="empty">No recordings yet</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < recs.length; i++) {
+        var r = recs[i];
+        var base = "/recordings/" + r.bot_id + "/";
+        var shortId = r.bot_id.substring(0, 8);
+        var info = r.clips + " clips";
+        if (r.duration) info += " &middot; " + formatDuration(r.duration);
+        html += '<div class="bot-row">' +
+          '<div class="bot-info">' +
+            '<strong>' + shortId + '</strong> ' +
+            '<span style="color:#888">' + info + '</span>' +
+            '<div class="dl-links">' +
+              '<a href="' + base + 'full_audio.mp3" download>Audio MP3</a>' +
+              '<a href="' + base + 'subtitles.srt" download>Subtitles SRT</a>' +
+              '<a href="' + base + 'transcript.jsonl" download>Transcript</a>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }
+      recList.innerHTML = html;
+    }).catch(function() {});
+  }
+
   connect();
+  loadRecordings();
+  setInterval(loadRecordings, 15000);
 })();
 </script>
 </body>

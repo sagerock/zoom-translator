@@ -90,6 +90,35 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response = connection.respond(200, "ok")
         return response
 
+    # API: list all recordings
+    if request.path == "/api/recordings":
+        recordings = []
+        if RECORDINGS_DIR.is_dir():
+            for rec_dir in sorted(RECORDINGS_DIR.iterdir(), reverse=True):
+                if not rec_dir.is_dir():
+                    continue
+                clips = list(rec_dir.glob("clip_*.mp3"))
+                if not clips:
+                    continue
+                # Read first transcript line for metadata
+                meta = {"bot_id": rec_dir.name, "clips": len(clips)}
+                tj = rec_dir / "transcript.jsonl"
+                if tj.is_file():
+                    lines = tj.read_text(encoding="utf-8").strip().splitlines()
+                    if lines:
+                        try:
+                            first = json.loads(lines[0])
+                            last = json.loads(lines[-1])
+                            meta["first_original"] = first.get("original", "")
+                            meta["duration"] = round(last.get("audio_end", 0), 1)
+                        except json.JSONDecodeError:
+                            pass
+                recordings.append(meta)
+        body = json.dumps(recordings)
+        response = connection.respond(200, body)
+        response.headers["Content-Type"] = "application/json"
+        return response
+
     # Download recordings: /recordings/<bot_id>/<filename>
     if request.path.startswith("/recordings/"):
         parts = request.path.strip("/").split("/")
