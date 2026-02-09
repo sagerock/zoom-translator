@@ -119,25 +119,28 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response.headers["Content-Type"] = "application/json"
         return response
 
-    # Download recordings: /recordings/<bot_id>/<filename>
+    # API: get full audio as base64 JSON for client-side download
+    if request.path.startswith("/api/recordings/") and request.path.endswith("/audio"):
+        # /api/recordings/<bot_id>/audio
+        parts = request.path.strip("/").split("/")
+        if len(parts) == 4:
+            bot_id = parts[2]
+            rec_dir = RECORDINGS_DIR / bot_id
+            if rec_dir.is_dir():
+                body = _build_full_audio(rec_dir)
+                if body:
+                    payload = json.dumps({"mp3": base64.b64encode(body).decode()})
+                    response = connection.respond(200, payload)
+                    response.headers["Content-Type"] = "application/json"
+                    return response
+        return connection.respond(404, "Not Found")
+
+    # Download recordings: /recordings/<bot_id>/<filename> (text files only)
     if request.path.startswith("/recordings/"):
         parts = request.path.strip("/").split("/")
         if len(parts) == 3:
             bot_id, filename = parts[1], parts[2]
             rec_dir = RECORDINGS_DIR / bot_id
-            # Serve concatenated audio on-the-fly
-            if filename == "full_audio.mp3" and rec_dir.is_dir():
-                body = _build_full_audio(rec_dir)
-                if body:
-                    response = connection.respond(200, "")
-                    response.body = body
-                    response.headers["Content-Type"] = "audio/mpeg"
-                    response.headers["Content-Length"] = str(len(body))
-                    response.headers["Content-Disposition"] = (
-                        f'attachment; filename="{bot_id[:8]}_translation.mp3"'
-                    )
-                    return response
-            # Serve SRT / transcript directly
             file_path = (rec_dir / filename).resolve()
             if file_path.parent == rec_dir.resolve() and file_path.is_file():
                 ct_map = {".srt": "text/plain; charset=utf-8",

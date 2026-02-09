@@ -209,7 +209,7 @@ HTML_PAGE = """\
       var dlHtml = "";
       if (b.clip_count > 0) {
         dlHtml = '<div class="dl-links">' +
-          '<a href="' + recBase + 'full_audio.mp3" download>Audio MP3</a>' +
+          '<a href="#" onclick="downloadMp3(\'' + b.bot_id + '\');return false;">Audio MP3</a>' +
           '<a href="' + recBase + 'subtitles.srt" download>Subtitles SRT</a>' +
           '<a href="' + recBase + 'transcript.jsonl" download>Transcript</a>' +
           '(' + b.clip_count + ' clips)' +
@@ -295,7 +295,7 @@ HTML_PAGE = """\
             '<strong>' + shortId + '</strong> ' +
             '<span style="color:#888">' + info + '</span>' +
             '<div class="dl-links">' +
-              '<a href="' + base + 'full_audio.mp3" download>Audio MP3</a>' +
+              '<a href="#" onclick="downloadMp3(\'' + r.bot_id + '\');return false;">Audio MP3</a>' +
               '<a href="' + base + 'subtitles.srt" download>Subtitles SRT</a>' +
               '<a href="' + base + 'transcript.jsonl" download>Transcript</a>' +
             '</div>' +
@@ -305,6 +305,23 @@ HTML_PAGE = """\
       recList.innerHTML = html;
     }).catch(function() {});
   }
+
+  window.downloadMp3 = function(botId) {
+    fetch("/api/recordings/" + botId + "/audio")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var raw = atob(data.mp3);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        var blob = new Blob([bytes], {type: "audio/mpeg"});
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = botId.substring(0, 8) + "_translation.mp3";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      })
+      .catch(function() { showError("Failed to download audio"); });
+  };
 
   connect();
   loadRecordings();
