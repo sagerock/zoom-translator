@@ -39,7 +39,7 @@ class ASRStream:
     async def start(self) -> None:
         self._ctx = self._dg.listen.v1.connect(
             model="nova-2",
-            language="multi",
+            language="es",
             punctuate="true",
             interim_results="false",
             encoding="linear16",
