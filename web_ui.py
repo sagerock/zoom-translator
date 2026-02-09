@@ -287,15 +287,25 @@ LISTEN_PAGE = """\
   .clip-count {
     font-size: .8rem; color: #999; margin-top: 1rem;
   }
+  .start-btn {
+    background: #4361ee; color: #fff; border: none; padding: .8rem 2rem;
+    border-radius: 8px; font-size: 1.1rem; cursor: pointer; font-weight: 600;
+    margin-bottom: 1.5rem;
+  }
+  .start-btn:hover { background: #3a56d4; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Translation Listener</h1>
   <div class="lang" id="lang-label"></div>
-  <div class="status-badge connecting" id="status">Connecting...</div>
-  <div class="activity" id="activity">Waiting for translation...</div>
-  <div class="clip-count" id="clip-count"></div>
+  <button class="start-btn" id="start-btn">Start Listening</button>
+  <div class="hidden" id="live-area">
+    <div class="status-badge connecting" id="status">Connecting...</div>
+    <div class="activity" id="activity">Waiting for translation...</div>
+    <div class="clip-count" id="clip-count"></div>
+  </div>
 </div>
 
 <script>
@@ -308,6 +318,8 @@ LISTEN_PAGE = """\
   var params = new URLSearchParams(location.search);
   var lang = params.get("lang") || "";
   var langLabel = document.getElementById("lang-label");
+  var startBtn = document.getElementById("start-btn");
+  var liveArea = document.getElementById("live-area");
   var statusEl = document.getElementById("status");
   var activityEl = document.getElementById("activity");
   var clipCountEl = document.getElementById("clip-count");
@@ -315,6 +327,8 @@ LISTEN_PAGE = """\
   langLabel.textContent = LANG_NAMES[lang] || lang.toUpperCase();
 
   if (!lang) {
+    startBtn.classList.add("hidden");
+    liveArea.classList.remove("hidden");
     statusEl.textContent = "Error";
     statusEl.className = "status-badge disconnected";
     activityEl.textContent = "Missing ?lang= parameter in URL";
@@ -390,7 +404,11 @@ LISTEN_PAGE = """\
     };
   }
 
-  connect();
+  startBtn.addEventListener("click", function() {
+    startBtn.classList.add("hidden");
+    liveArea.classList.remove("hidden");
+    connect();
+  });
 })();
 </script>
 </body>
