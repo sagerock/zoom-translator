@@ -48,3 +48,8 @@ TTS_VOICES = {
 }
 
 RECALL_API_BASE = "https://eu-central-1.recall.ai/api/v1"
+
+# Supabase
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]  # sb_secret_... or legacy service_role JWT

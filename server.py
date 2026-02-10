@@ -13,7 +13,6 @@ import logging
 import signal
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, parse_qs
 
@@ -22,6 +21,7 @@ from websockets.asyncio.server import serve, ServerConnection
 from websockets.http11 import Request, Response
 
 import config
+import supabase_client
 from pipeline.asr import ASRStream
 from pipeline.translator import translate
 from pipeline.tts import synthesize
@@ -37,8 +37,6 @@ log = logging.getLogger(__name__)
 
 # ── Per-bot session state ──────────────────────────────────────────────
 
-RECORDINGS_DIR = Path(__file__).parent / "recordings"
-
 
 @dataclass
 class BotSession:
@@ -46,22 +44,34 @@ class BotSession:
     meeting_url: str
     source_lang: str
     target_lang: str
+    user_id: str = ""
     status: str = "starting"  # starting | in_call | stopped
     asr_streams: dict[str, ASRStream] = field(default_factory=dict)
-    recording_dir: Path | None = None
     recording_start: float = 0.0
     clip_count: int = 0
     audio_offset: float = 0.0  # cumulative audio seconds for SRT timing
+    srt_buffer: str = ""
+    transcript_buffer: str = ""
 
 
 # bot_id → BotSession
 bot_sessions: dict[str, BotSession] = {}
 
-# Connected management UI WebSocket clients
-mgmt_clients: set[ServerConnection] = set()
+# Connected management UI WebSocket clients: ws → user_id
+mgmt_clients: dict[ServerConnection, str] = {}
 
 # target_lang → set of WebSocket connections (listener browsers)
 listener_clients: dict[str, set[ServerConnection]] = {}
+
+
+# ── Auth helpers ───────────────────────────────────────────────────────
+
+async def _extract_user_from_header(request: Request) -> dict | None:
+    """Extract and verify JWT from Authorization header."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return await supabase_client.verify_jwt(auth[7:])
+    return None
 
 
 # ── HTTP request handler (serves web UI) ──────────────────────────────
@@ -77,7 +87,9 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         return None
 
     if request.path == "/" or request.path == "/index.html":
-        response = connection.respond(200, HTML_PAGE)
+        page = HTML_PAGE.replace("__SUPABASE_URL__", config.SUPABASE_URL)
+        page = page.replace("__SUPABASE_ANON_KEY__", config.SUPABASE_ANON_KEY)
+        response = connection.respond(200, page)
         response.headers["Content-Type"] = "text/html; charset=utf-8"
         return response
 
@@ -90,68 +102,71 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response = connection.respond(200, "ok")
         return response
 
-    # API: list all recordings
+    # API: list user's recordings from Supabase
     if request.path == "/api/recordings":
+        user = await _extract_user_from_header(request)
+        if not user:
+            return connection.respond(401, "Unauthorized")
+        user_id = user["sub"]
+        sessions = await supabase_client.get_user_sessions(user_id)
         recordings = []
-        if RECORDINGS_DIR.is_dir():
-            for rec_dir in sorted(RECORDINGS_DIR.iterdir(), reverse=True):
-                if not rec_dir.is_dir():
-                    continue
-                clips = list(rec_dir.glob("clip_*.mp3"))
-                if not clips:
-                    continue
-                # Read first transcript line for metadata
-                meta = {"bot_id": rec_dir.name, "clips": len(clips)}
-                tj = rec_dir / "transcript.jsonl"
-                if tj.is_file():
-                    lines = tj.read_text(encoding="utf-8").strip().splitlines()
-                    if lines:
-                        try:
-                            first = json.loads(lines[0])
-                            last = json.loads(lines[-1])
-                            meta["first_original"] = first.get("original", "")
-                            meta["duration"] = round(last.get("audio_end", 0), 1)
-                        except json.JSONDecodeError:
-                            pass
-                recordings.append(meta)
+        for s in sessions:
+            if s.get("clip_count", 0) > 0:
+                recordings.append({
+                    "bot_id": s["bot_id"],
+                    "clips": s["clip_count"],
+                    "duration": s.get("duration"),
+                    "status": s.get("status"),
+                })
         body = json.dumps(recordings)
         response = connection.respond(200, body)
         response.headers["Content-Type"] = "application/json"
         return response
 
-    # API: get full audio as base64 JSON for client-side download
+    # API: get signed URLs for all audio clips
     if request.path.startswith("/api/recordings/") and request.path.endswith("/audio"):
-        # /api/recordings/<bot_id>/audio
+        user = await _extract_user_from_header(request)
+        if not user:
+            return connection.respond(401, "Unauthorized")
+        user_id = user["sub"]
         parts = request.path.strip("/").split("/")
         if len(parts) == 4:
             bot_id = parts[2]
-            rec_dir = RECORDINGS_DIR / bot_id
-            if rec_dir.is_dir():
-                body = _build_full_audio(rec_dir)
-                if body:
-                    payload = json.dumps({"mp3": base64.b64encode(body).decode()})
-                    response = connection.respond(200, payload)
-                    response.headers["Content-Type"] = "application/json"
-                    return response
+            # Verify ownership
+            session = await supabase_client.get_session_by_bot_id(bot_id)
+            if not session or session.get("user_id") != user_id:
+                return connection.respond(403, "Forbidden")
+            clip_count = session.get("clip_count", 0)
+            urls = []
+            for i in range(1, clip_count + 1):
+                path = f"{user_id}/{bot_id}/clip_{i:04d}.mp3"
+                url = await supabase_client.get_signed_url(path)
+                if url:
+                    urls.append(url)
+            payload = json.dumps({"urls": urls})
+            response = connection.respond(200, payload)
+            response.headers["Content-Type"] = "application/json"
+            return response
         return connection.respond(404, "Not Found")
 
-    # Download recordings: /recordings/<bot_id>/<filename> (text files only)
+    # Download recordings: /recordings/<bot_id>/<filename> → redirect to signed URL
     if request.path.startswith("/recordings/"):
+        user = await _extract_user_from_header(request)
+        if not user:
+            return connection.respond(401, "Unauthorized")
+        user_id = user["sub"]
         parts = request.path.strip("/").split("/")
         if len(parts) == 3:
             bot_id, filename = parts[1], parts[2]
-            rec_dir = RECORDINGS_DIR / bot_id
-            file_path = (rec_dir / filename).resolve()
-            if file_path.parent == rec_dir.resolve() and file_path.is_file():
-                ct_map = {".srt": "text/plain; charset=utf-8",
-                          ".jsonl": "application/json; charset=utf-8"}
-                ct = ct_map.get(file_path.suffix, "application/octet-stream")
-                text = file_path.read_text(encoding="utf-8")
-                response = connection.respond(200, text)
-                response.headers["Content-Type"] = ct
-                response.headers["Content-Disposition"] = (
-                    f'attachment; filename="{bot_id[:8]}_{filename}"'
-                )
+            # Verify ownership
+            session = await supabase_client.get_session_by_bot_id(bot_id)
+            if not session or session.get("user_id") != user_id:
+                return connection.respond(403, "Forbidden")
+            path = f"{user_id}/{bot_id}/{filename}"
+            signed_url = await supabase_client.get_signed_url(path)
+            if signed_url:
+                response = connection.respond(302, "")
+                response.headers["Location"] = signed_url
                 return response
         return connection.respond(404, "Not Found")
 
@@ -161,7 +176,8 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
 
 # ── Management WebSocket broadcast ────────────────────────────────────
 
-def _sessions_snapshot() -> list[dict]:
+def _sessions_snapshot(user_id: str) -> list[dict]:
+    """Return bot sessions belonging to a specific user."""
     return [
         {
             "bot_id": s.bot_id,
@@ -172,30 +188,33 @@ def _sessions_snapshot() -> list[dict]:
             "clip_count": s.clip_count,
         }
         for s in bot_sessions.values()
+        if s.user_id == user_id
     ]
 
 
 async def broadcast_status() -> None:
-    """Send current bot status to all connected management clients."""
-    msg = json.dumps({"type": "status", "bots": _sessions_snapshot()})
+    """Send current bot status to all connected management clients, filtered by user."""
     stale = set()
-    for ws in mgmt_clients:
+    for ws, user_id in mgmt_clients.items():
         try:
+            msg = json.dumps({"type": "status", "bots": _sessions_snapshot(user_id)})
             await ws.send(msg)
         except Exception:
             stale.add(ws)
-    mgmt_clients.difference_update(stale)
+    for ws in stale:
+        mgmt_clients.pop(ws, None)
 
 
 # ── Management WebSocket handler (/mgmt) ──────────────────────────────
 
-async def mgmt_handler(ws: ServerConnection) -> None:
+async def mgmt_handler(ws: ServerConnection, user: dict) -> None:
     """Handle management WebSocket connections from the web UI."""
-    mgmt_clients.add(ws)
-    log.info("Management client connected")
+    user_id = user["sub"]
+    mgmt_clients[ws] = user_id
+    log.info("Management client connected (user=%s)", user_id[:8])
 
     # Send current state immediately
-    await ws.send(json.dumps({"type": "status", "bots": _sessions_snapshot()}))
+    await ws.send(json.dumps({"type": "status", "bots": _sessions_snapshot(user_id)}))
 
     try:
         async for raw_msg in ws:
@@ -208,20 +227,20 @@ async def mgmt_handler(ws: ServerConnection) -> None:
             action = msg.get("action")
 
             if action == "start":
-                await _handle_start(ws, msg)
+                await _handle_start(ws, msg, user_id)
             elif action == "stop":
-                await _handle_stop(ws, msg)
+                await _handle_stop(ws, msg, user_id)
             else:
                 await ws.send(json.dumps({"type": "error", "message": f"Unknown action: {action}"}))
 
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:
-        mgmt_clients.discard(ws)
-        log.info("Management client disconnected")
+        mgmt_clients.pop(ws, None)
+        log.info("Management client disconnected (user=%s)", user_id[:8])
 
 
-async def _handle_start(ws: ServerConnection, msg: dict) -> None:
+async def _handle_start(ws: ServerConnection, msg: dict, user_id: str) -> None:
     meeting_url = msg.get("meeting_url", "").strip()
     source_lang = msg.get("source_lang", "en")
     target_langs = msg.get("target_langs", [])
@@ -243,11 +262,22 @@ async def _handle_start(ws: ServerConnection, msg: dict) -> None:
                 meeting_url=meeting_url,
                 source_lang=source_lang,
                 target_lang=target_lang,
+                user_id=user_id,
                 status="in_call",
             )
             bot_sessions[bot_id] = session
             _init_recording(session)
-            log.info("Started bot %s for %s → %s", bot_id, source_lang, target_lang)
+
+            # Persist to Supabase DB
+            asyncio.create_task(supabase_client.create_session(
+                user_id=user_id,
+                bot_id=bot_id,
+                meeting_url=meeting_url,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            ))
+
+            log.info("Started bot %s for %s → %s (user=%s)", bot_id, source_lang, target_lang, user_id[:8])
         except Exception as e:
             log.exception("Failed to create bot for %s", target_lang)
             await ws.send(json.dumps({"type": "error", "message": f"Failed to create bot for {lang_upper}: {e}"}))
@@ -255,11 +285,16 @@ async def _handle_start(ws: ServerConnection, msg: dict) -> None:
     await broadcast_status()
 
 
-async def _handle_stop(ws: ServerConnection, msg: dict) -> None:
+async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str) -> None:
     bot_id = msg.get("bot_id", "").strip()
     session = bot_sessions.get(bot_id)
     if not session:
         await ws.send(json.dumps({"type": "error", "message": f"Unknown bot: {bot_id}"}))
+        return
+
+    # Verify ownership
+    if session.user_id != user_id:
+        await ws.send(json.dumps({"type": "error", "message": "Not authorized to stop this bot"}))
         return
 
     try:
@@ -275,6 +310,22 @@ async def _handle_stop(ws: ServerConnection, msg: dict) -> None:
 
     session.status = "stopped"
     await broadcast_status()
+
+    # Upload final SRT and transcript to Supabase Storage
+    duration = session.audio_offset
+    if session.srt_buffer:
+        asyncio.create_task(supabase_client.upload_text_file(
+            session.user_id, bot_id, "subtitles.srt", session.srt_buffer
+        ))
+    if session.transcript_buffer:
+        asyncio.create_task(supabase_client.upload_text_file(
+            session.user_id, bot_id, "transcript.jsonl", session.transcript_buffer
+        ))
+
+    # Update DB status
+    asyncio.create_task(supabase_client.update_session_status(
+        bot_id, "stopped", clip_count=session.clip_count, duration=round(duration, 1)
+    ))
 
     # Remove from active sessions after broadcasting the stopped status
     bot_sessions.pop(bot_id, None)
@@ -326,11 +377,10 @@ async def broadcast_audio(lang: str, mp3_b64: str, original: str = "", translate
 # ── Recording ─────────────────────────────────────────────────────────
 
 def _init_recording(session: BotSession) -> None:
-    rec_dir = RECORDINGS_DIR / session.bot_id
-    rec_dir.mkdir(parents=True, exist_ok=True)
-    session.recording_dir = rec_dir
     session.recording_start = time.time()
-    log.info("Recording to %s", rec_dir)
+    session.srt_buffer = ""
+    session.transcript_buffer = ""
+    log.info("Recording initialized for bot %s (cloud storage)", session.bot_id)
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -344,31 +394,26 @@ def _format_srt_time(seconds: float) -> str:
 
 
 def save_recording(session: BotSession, mp3_b64: str, original: str, translated: str) -> None:
-    if not session.recording_dir:
-        return
-
     mp3_bytes = base64.b64decode(mp3_b64)
     session.clip_count += 1
     n = session.clip_count
 
-    # Save individual clip
-    clip_path = session.recording_dir / f"clip_{n:04d}.mp3"
-    clip_path.write_bytes(mp3_bytes)
+    # Upload clip to Supabase Storage (fire-and-forget)
+    asyncio.create_task(supabase_client.upload_clip(
+        session.user_id, session.bot_id, n, mp3_bytes
+    ))
 
     # Estimate clip duration (~64 kbps = 8000 bytes/sec)
     duration = len(mp3_bytes) / 8000.0
     start = session.audio_offset
     session.audio_offset += duration
 
-    # Append to SRT (timed to concatenated audio)
-    srt_path = session.recording_dir / "subtitles.srt"
-    with open(srt_path, "a", encoding="utf-8") as f:
-        f.write(f"{n}\n")
-        f.write(f"{_format_srt_time(start)} --> {_format_srt_time(session.audio_offset)}\n")
-        f.write(f"{translated}\n\n")
+    # Append to in-memory SRT buffer
+    session.srt_buffer += f"{n}\n"
+    session.srt_buffer += f"{_format_srt_time(start)} --> {_format_srt_time(session.audio_offset)}\n"
+    session.srt_buffer += f"{translated}\n\n"
 
-    # Append to transcript (JSONL with wall-clock timestamp)
-    transcript_path = session.recording_dir / "transcript.jsonl"
+    # Append to in-memory transcript buffer (JSONL)
     elapsed = time.time() - session.recording_start
     entry = {
         "n": n,
@@ -378,17 +423,12 @@ def save_recording(session: BotSession, mp3_b64: str, original: str, translated:
         "original": original,
         "translated": translated,
     }
-    with open(transcript_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    session.transcript_buffer += json.dumps(entry, ensure_ascii=False) + "\n"
 
-
-def _build_full_audio(rec_dir: Path) -> bytes:
-    """Concatenate all clip MP3s into one file."""
-    clips = sorted(rec_dir.glob("clip_*.mp3"))
-    chunks = []
-    for clip in clips:
-        chunks.append(clip.read_bytes())
-    return b"".join(chunks)
+    # Update DB clip count periodically (fire-and-forget)
+    asyncio.create_task(supabase_client.update_session_status(
+        session.bot_id, "in_call", clip_count=n
+    ))
 
 
 # ── Pipeline callback chain (per-session) ─────────────────────────────
@@ -509,10 +549,17 @@ async def recall_handler(ws: ServerConnection) -> None:
 async def handler(ws: ServerConnection) -> None:
     """Route WebSocket connections based on request path."""
     path = ws.request.path if ws.request else "/"
+    parsed = urlparse(path)
 
-    if path == "/mgmt":
-        await mgmt_handler(ws)
-    elif path.startswith("/listen"):
+    if parsed.path == "/mgmt":
+        # Validate JWT from query string
+        token = parse_qs(parsed.query).get("token", [""])[0]
+        user = await supabase_client.verify_jwt(token)
+        if not user:
+            await ws.close(1008, "Invalid auth token")
+            return
+        await mgmt_handler(ws, user)
+    elif parsed.path.startswith("/listen"):
         await listen_handler(ws)
     else:
         await recall_handler(ws)

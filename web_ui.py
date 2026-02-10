@@ -12,6 +12,7 @@ HTML_PAGE = """\
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zoom Translator</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -25,11 +26,11 @@ HTML_PAGE = """\
     box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 1.5rem;
   }
   label { display: block; font-weight: 600; margin-bottom: .4rem; font-size: .9rem; }
-  input[type="text"], select {
+  input[type="text"], input[type="email"], input[type="password"], select {
     width: 100%; padding: .6rem .8rem; border: 1px solid #ddd;
     border-radius: 6px; font-size: .95rem; margin-bottom: 1rem;
   }
-  input[type="text"]:focus, select:focus {
+  input[type="text"]:focus, input[type="email"]:focus, input[type="password"]:focus, select:focus {
     outline: none; border-color: #4361ee;
   }
   .checkboxes { margin-bottom: 1rem; }
@@ -90,11 +91,66 @@ HTML_PAGE = """\
     background: #f8d7da; color: #721c24; padding: .6rem 1rem;
     border-radius: 6px; margin-bottom: .8rem; font-size: .85rem;
   }
+  /* Login screen */
+  #login-screen {
+    max-width: 380px; margin: 4rem auto;
+  }
+  #login-screen h1 { text-align: center; }
+  .auth-error {
+    background: #f8d7da; color: #721c24; padding: .5rem .8rem;
+    border-radius: 6px; margin-bottom: .8rem; font-size: .85rem;
+    display: none;
+  }
+  .auth-buttons { display: flex; gap: .8rem; }
+  .auth-buttons button { flex: 1; }
+  button.secondary {
+    background: #6c757d; color: #fff; border: none; padding: .7rem 1.5rem;
+    border-radius: 6px; font-size: .95rem; cursor: pointer; font-weight: 600;
+  }
+  button.secondary:hover { background: #5a6268; }
+  button.logout {
+    background: none; border: 1px solid #ddd; color: #888; padding: .3rem .8rem;
+    border-radius: 4px; font-size: .8rem; cursor: pointer; float: right;
+  }
+  button.logout:hover { background: #f5f5f5; color: #333; }
+  .user-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .user-email { font-size: .8rem; color: #888; }
+  #main-app { display: none; }
 </style>
 </head>
 <body>
+
+<!-- Login Screen -->
+<div id="login-screen">
+  <div class="container">
+    <h1>Zoom Translator</h1>
+    <div class="card">
+      <div class="auth-error" id="auth-error"></div>
+      <label for="auth-email">Email</label>
+      <input type="email" id="auth-email" placeholder="you@example.com">
+      <label for="auth-password">Password</label>
+      <input type="password" id="auth-password" placeholder="Password">
+      <div class="auth-buttons">
+        <button class="primary" id="signin-btn">Sign In</button>
+        <button class="secondary" id="signup-btn">Sign Up</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Main App (hidden until authenticated) -->
+<div id="main-app">
 <div class="container">
-  <h1>Zoom Translator</h1>
+  <div class="user-bar">
+    <h1>Zoom Translator</h1>
+    <div>
+      <span class="user-email" id="user-email"></span>
+      <button class="logout" id="logout-btn">Log out</button>
+    </div>
+  </div>
   <div id="conn-status" class="disconnected">Disconnected</div>
   <div id="errors"></div>
 
@@ -133,26 +189,122 @@ HTML_PAGE = """\
     <div id="rec-list"><div class="empty">No recordings yet</div></div>
   </div>
 </div>
+</div>
 
 <script>
 (function() {
-  const startBtn  = document.getElementById("start-btn");
-  const urlInput  = document.getElementById("meeting-url");
-  const sourceSel = document.getElementById("source-lang");
-  const botList   = document.getElementById("bot-list");
-  const recList   = document.getElementById("rec-list");
-  const connEl    = document.getElementById("conn-status");
-  const errorsEl  = document.getElementById("errors");
+  // ── Supabase auth ──────────────────────────────────────────────────
+  var sbUrl = "__SUPABASE_URL__";
+  var sbKey = "__SUPABASE_ANON_KEY__";
+  if (typeof supabase === "undefined") {
+    document.getElementById("auth-error").textContent = "Error: Supabase JS failed to load";
+    document.getElementById("auth-error").style.display = "block";
+    return;
+  }
+  var sb = supabase.createClient(sbUrl, sbKey);
+  var accessToken = null;
 
-  let ws = null;
-  let reconnectTimer = null;
+  var loginScreen = document.getElementById("login-screen");
+  var mainApp     = document.getElementById("main-app");
+  var authError   = document.getElementById("auth-error");
+  var authEmail   = document.getElementById("auth-email");
+  var authPass    = document.getElementById("auth-password");
+  var signinBtn   = document.getElementById("signin-btn");
+  var signupBtn   = document.getElementById("signup-btn");
+  var logoutBtn   = document.getElementById("logout-btn");
+  var userEmailEl = document.getElementById("user-email");
+
+  function showLogin() {
+    loginScreen.style.display = "";
+    mainApp.style.display = "none";
+    accessToken = null;
+    if (ws) ws.close();
+  }
+
+  function showApp(session) {
+    accessToken = session.access_token;
+    loginScreen.style.display = "none";
+    mainApp.style.display = "block";
+    userEmailEl.textContent = session.user.email || "";
+    connect();
+    loadRecordings();
+  }
+
+  function showAuthError(msg) {
+    authError.textContent = msg;
+    authError.style.display = "block";
+    setTimeout(function() { authError.style.display = "none"; }, 6000);
+  }
+
+  // onAuthStateChange is the single source of truth for auth state.
+  // It fires INITIAL_SESSION on load, SIGNED_IN after login/signup,
+  // TOKEN_REFRESHED on refresh, and SIGNED_OUT on logout.
+  sb.auth.onAuthStateChange(function(event, session) {
+    if (session && session.access_token) {
+      var wasLoggedIn = !!accessToken;
+      accessToken = session.access_token;
+      if (!wasLoggedIn) {
+        showApp(session);
+      }
+    } else if (event === "SIGNED_OUT" || event === "TOKEN_REFRESHED") {
+      if (accessToken) {
+        accessToken = null;
+        showLogin();
+      }
+    }
+  });
+
+  signinBtn.addEventListener("click", function() {
+    var email = authEmail.value.trim();
+    var pass  = authPass.value;
+    if (!email || !pass) { showAuthError("Enter email and password"); return; }
+    sb.auth.signInWithPassword({email: email, password: pass}).then(function(res) {
+      if (res.error) { showAuthError(res.error.message); }
+      // showApp will be called by onAuthStateChange
+    });
+  });
+
+  signupBtn.addEventListener("click", function() {
+    var email = authEmail.value.trim();
+    var pass  = authPass.value;
+    if (!email || !pass) { showAuthError("Enter email and password"); return; }
+    sb.auth.signUp({email: email, password: pass}).then(function(res) {
+      if (res.error) { showAuthError(res.error.message); return; }
+      if (!res.data.session) {
+        showAuthError("Check your email to confirm your account.");
+      }
+      // showApp will be called by onAuthStateChange
+    });
+  });
+
+  logoutBtn.addEventListener("click", function() {
+    sb.auth.signOut().then(function() { showLogin(); });
+  });
+
+  // Allow Enter key to submit login
+  authPass.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") signinBtn.click();
+  });
+
+  // ── Management UI ──────────────────────────────────────────────────
+  var startBtn  = document.getElementById("start-btn");
+  var urlInput  = document.getElementById("meeting-url");
+  var sourceSel = document.getElementById("source-lang");
+  var botList   = document.getElementById("bot-list");
+  var recList   = document.getElementById("rec-list");
+  var connEl    = document.getElementById("conn-status");
+  var errorsEl  = document.getElementById("errors");
+
+  var ws = null;
+  var reconnectTimer = null;
 
   function wsUrl() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    return proto + "//" + location.host + "/mgmt";
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return proto + "//" + location.host + "/mgmt?token=" + encodeURIComponent(accessToken);
   }
 
   function connect() {
+    if (!accessToken) return;
     if (ws && ws.readyState <= 1) return;
     ws = new WebSocket(wsUrl());
 
@@ -195,6 +347,10 @@ HTML_PAGE = """\
     return location.protocol + "//" + location.host + "/listen?lang=" + lang;
   }
 
+  function authHeaders() {
+    return { "Authorization": "Bearer " + accessToken };
+  }
+
   function renderBots(bots) {
     if (!bots || bots.length === 0) {
       botList.innerHTML = '<div class="empty">No active bots</div>';
@@ -205,13 +361,12 @@ HTML_PAGE = """\
       var b = bots[i];
       var shortId = b.bot_id.substring(0, 8);
       var url = listenUrl(b.target_lang);
-      var recBase = "/recordings/" + b.bot_id + "/";
       var dlHtml = "";
       if (b.clip_count > 0) {
         dlHtml = '<div class="dl-links">' +
-          '<a href="#" onclick="downloadMp3(\'' + b.bot_id + '\');return false;">Audio MP3</a>' +
-          '<a href="' + recBase + 'subtitles.srt" download>Subtitles SRT</a>' +
-          '<a href="' + recBase + 'transcript.jsonl" download>Transcript</a>' +
+          '<a href="#" onclick="downloadMp3(\\x27' + b.bot_id + '\\x27);return false;">Audio MP3</a>' +
+          '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
+          '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
           '(' + b.clip_count + ' clips)' +
         '</div>';
       }
@@ -278,7 +433,8 @@ HTML_PAGE = """\
   }
 
   function loadRecordings() {
-    fetch("/api/recordings").then(function(r) { return r.json(); }).then(function(recs) {
+    if (!accessToken) return;
+    fetch("/api/recordings", {headers: authHeaders()}).then(function(r) { return r.json(); }).then(function(recs) {
       if (!recs || recs.length === 0) {
         recList.innerHTML = '<div class="empty">No recordings yet</div>';
         return;
@@ -286,7 +442,6 @@ HTML_PAGE = """\
       var html = "";
       for (var i = 0; i < recs.length; i++) {
         var r = recs[i];
-        var base = "/recordings/" + r.bot_id + "/";
         var shortId = r.bot_id.substring(0, 8);
         var info = r.clips + " clips";
         if (r.duration) info += " &middot; " + formatDuration(r.duration);
@@ -295,9 +450,9 @@ HTML_PAGE = """\
             '<strong>' + shortId + '</strong> ' +
             '<span style="color:#888">' + info + '</span>' +
             '<div class="dl-links">' +
-              '<a href="#" onclick="downloadMp3(\'' + r.bot_id + '\');return false;">Audio MP3</a>' +
-              '<a href="' + base + 'subtitles.srt" download>Subtitles SRT</a>' +
-              '<a href="' + base + 'transcript.jsonl" download>Transcript</a>' +
+              '<a href="#" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
+              '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
+              '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -306,14 +461,42 @@ HTML_PAGE = """\
     }).catch(function() {});
   }
 
+  // Download individual file via signed URL
+  window.downloadFile = function(botId, filename) {
+    fetch("/recordings/" + botId + "/" + filename, {headers: authHeaders()})
+      .then(function(r) {
+        if (r.redirected) {
+          return fetch(r.url).then(function(r2) { return r2.blob(); });
+        }
+        return r.blob();
+      })
+      .then(function(blob) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = botId.substring(0, 8) + "_" + filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      })
+      .catch(function() { showError("Failed to download " + filename); });
+  };
+
+  // Download all clips as a single concatenated MP3
   window.downloadMp3 = function(botId) {
-    fetch("/api/recordings/" + botId + "/audio")
+    fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders()})
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        var raw = atob(data.mp3);
-        var bytes = new Uint8Array(raw.length);
-        for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-        var blob = new Blob([bytes], {type: "audio/mpeg"});
+        if (!data.urls || data.urls.length === 0) {
+          showError("No audio clips found");
+          return;
+        }
+        // Fetch all clip URLs and concatenate
+        return Promise.all(data.urls.map(function(url) {
+          return fetch(url).then(function(r) { return r.arrayBuffer(); });
+        }));
+      })
+      .then(function(buffers) {
+        if (!buffers) return;
+        var blob = new Blob(buffers, {type: "audio/mpeg"});
         var a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         a.download = botId.substring(0, 8) + "_translation.mp3";
@@ -323,8 +506,7 @@ HTML_PAGE = """\
       .catch(function() { showError("Failed to download audio"); });
   };
 
-  connect();
-  loadRecordings();
+  // Periodic refresh of recordings
   setInterval(loadRecordings, 15000);
 })();
 </script>
