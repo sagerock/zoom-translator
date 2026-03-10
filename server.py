@@ -69,7 +69,7 @@ mgmt_clients: dict[ServerConnection, dict] = {}
 listener_clients: dict[str, set[ServerConnection]] = {}
 
 # bot_ids currently building a synced MP3 (prevents duplicate builds)
-_synced_builds: set[str] = {}
+_synced_builds: set[str] = set()
 
 
 # ── Auth helpers ───────────────────────────────────────────────────────
