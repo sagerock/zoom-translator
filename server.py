@@ -124,8 +124,8 @@ async def _build_synced_mp3(owner_id: str, bot_id: str) -> bytes:
         clip_count = len(entries)
         log.info("Building synced MP3 for %s: %d clips", bot_id[:8], clip_count)
 
-        # 3. Get signed URLs for all clips (batched)
-        BATCH = 20
+        # 3. Get signed URLs for all clips (batched, low concurrency)
+        BATCH = 5
         clip_urls = {}
         for batch_start in range(1, clip_count + 1, BATCH):
             batch_end = min(batch_start + BATCH, clip_count + 1)
@@ -137,26 +137,38 @@ async def _build_synced_mp3(owner_id: str, bot_id: str) -> bytes:
             for i, url in zip(tasks.keys(), results):
                 if url:
                     clip_urls[i] = url
+            await asyncio.sleep(0.1)  # back-pressure
 
         log.info("Signed URLs ready for %s: %d/%d", bot_id[:8], len(clip_urls), clip_count)
 
-        # 4. Download all clips (batched)
-        DL_BATCH = 10
+        # 4. Download all clips (batched with retry)
+        DL_BATCH = 5
+        MAX_RETRIES = 3
         clip_data: dict[int, bytes] = {}
         clip_nums = sorted(clip_urls.keys())
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             for batch_start in range(0, len(clip_nums), DL_BATCH):
                 batch = clip_nums[batch_start:batch_start + DL_BATCH]
 
-                async def _download(n: int) -> tuple[int, bytes]:
-                    r = await client.get(clip_urls[n])
-                    r.raise_for_status()
-                    return n, r.content
+                async def _download(n: int) -> tuple[int, bytes | None]:
+                    for attempt in range(MAX_RETRIES):
+                        try:
+                            r = await client.get(clip_urls[n])
+                            r.raise_for_status()
+                            return n, r.content
+                        except Exception:
+                            if attempt < MAX_RETRIES - 1:
+                                await asyncio.sleep(1.0 * (attempt + 1))
+                            else:
+                                log.warning("Failed to download clip %d after %d retries", n, MAX_RETRIES)
+                    return n, None
 
                 results = await asyncio.gather(*[_download(n) for n in batch])
                 for n, data in results:
-                    clip_data[n] = data
+                    if data is not None:
+                        clip_data[n] = data
+                await asyncio.sleep(0.1)  # back-pressure
 
         log.info("Clips downloaded for %s: %d clips", bot_id[:8], len(clip_data))
     finally:

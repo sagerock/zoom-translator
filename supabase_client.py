@@ -176,12 +176,16 @@ async def upload_or_update_file(path: str, data: bytes, content_type: str) -> No
 
 
 async def get_signed_url(path: str, expires_in: int = 3600) -> str | None:
-    """Generate a signed download URL for a storage object."""
-    try:
-        resp = await asyncio.to_thread(
-            lambda: _client.storage.from_(BUCKET).create_signed_url(path, expires_in)
-        )
-        return resp.get("signedURL") or resp.get("signedUrl")
-    except Exception:
-        log.exception("Failed to create signed URL for %s", path)
-        return None
+    """Generate a signed download URL for a storage object (with retry)."""
+    for attempt in range(3):
+        try:
+            resp = await asyncio.to_thread(
+                lambda: _client.storage.from_(BUCKET).create_signed_url(path, expires_in)
+            )
+            return resp.get("signedURL") or resp.get("signedUrl")
+        except Exception:
+            if attempt < 2:
+                await asyncio.sleep(1.0 * (attempt + 1))
+            else:
+                log.exception("Failed to create signed URL for %s", path)
+    return None
