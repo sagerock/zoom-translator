@@ -183,68 +183,60 @@ async def _build_synced_mp3(owner_id: str, bot_id: str) -> bytes:
 
 
 def _ffmpeg_build_synced(entries: list[dict], clip_data: dict[int, bytes]) -> bytes:
-    """Use ffmpeg to place clips at their elapsed timestamps with silence gaps.
+    """Place clips at their elapsed timestamps using a raw PCM buffer on disk.
 
-    Uses a single pre-generated silence file with duration directives in the
-    concat list, instead of generating individual silence files per gap.
+    Creates a zeroed PCM file sized to the full timeline, decodes each MP3 clip
+    to raw PCM and writes it at the correct byte offset, then encodes once to MP3.
+    This avoids concat demuxer bugs and format mismatches that caused bloated output.
     """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Write each clip to a temp file
-        for n, data in clip_data.items():
-            with open(os.path.join(tmpdir, f"clip_{n:04d}.mp3"), "wb") as f:
-                f.write(data)
+    SAMPLE_RATE = 24000  # matches OpenAI TTS output
+    BYTES_PER_SAMPLE = 2  # 16-bit signed LE mono
 
-        # Find the max gap to determine silence file length
-        prev_end = 0.0
-        max_gap = 0.0
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. Calculate total duration from max (elapsed + clip_duration)
+        max_end = 0.0
         for entry in entries:
             if entry["n"] not in clip_data:
                 continue
-            gap = entry["elapsed"] - prev_end
-            if gap > max_gap:
-                max_gap = gap
             clip_dur = entry.get("audio_end", 0) - entry.get("audio_start", 0)
-            prev_end = entry["elapsed"] + clip_dur
+            max_end = max(max_end, entry["elapsed"] + max(clip_dur, 0.5))
 
-        # Generate ONE silence file covering the max gap
-        silence_path = os.path.join(tmpdir, "silence.mp3")
-        silence_dur = max(max_gap + 1.0, 2.0)
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "lavfi",
-            "-i", f"anullsrc=r=44100:cl=mono",
-            "-t", f"{silence_dur:.3f}",
-            "-c:a", "libmp3lame", "-b:a", "32k",
-            silence_path,
-        ], capture_output=True, check=True)
+        total_bytes = int((max_end + 1.0) * SAMPLE_RATE) * BYTES_PER_SAMPLE
 
-        # Build concat list using duration directives to trim the silence file
-        concat_list = os.path.join(tmpdir, "concat.txt")
-        prev_end = 0.0
+        # 2. Create zeroed PCM file on disk (write in 1MB chunks)
+        pcm_path = os.path.join(tmpdir, "timeline.pcm")
+        with open(pcm_path, "wb") as f:
+            chunk = b'\x00' * (1024 * 1024)
+            remaining = total_bytes
+            while remaining > 0:
+                write_size = min(remaining, len(chunk))
+                f.write(chunk[:write_size])
+                remaining -= write_size
 
-        with open(concat_list, "w") as f:
+        # 3. Decode each clip to raw PCM and write at correct byte offset
+        with open(pcm_path, "r+b") as pcm_file:
             for entry in entries:
                 n = entry["n"]
                 if n not in clip_data:
                     continue
-                elapsed = entry["elapsed"]
-                clip_dur = entry.get("audio_end", 0) - entry.get("audio_start", 0)
 
-                # Insert silence gap if needed (reuse single silence file)
-                gap = elapsed - prev_end
-                if gap > 0.05:
-                    f.write(f"file '{silence_path}'\n")
-                    f.write(f"duration {gap:.3f}\n")
+                proc = subprocess.run(
+                    ["ffmpeg", "-i", "pipe:0", "-f", "s16le",
+                     "-ar", str(SAMPLE_RATE), "-ac", "1", "pipe:1"],
+                    input=clip_data[n], capture_output=True,
+                )
+                if proc.returncode != 0:
+                    continue
 
-                clip_path = os.path.join(tmpdir, f"clip_{n:04d}.mp3")
-                f.write(f"file '{clip_path}'\n")
-                prev_end = elapsed + clip_dur
+                offset = int(entry["elapsed"] * SAMPLE_RATE) * BYTES_PER_SAMPLE
+                pcm_file.seek(offset)
+                pcm_file.write(proc.stdout)
 
-        # Concatenate everything into final MP3 (mono 32kbps keeps file small)
+        # 4. Single encode pass to MP3
         output_path = os.path.join(tmpdir, "output.mp3")
         subprocess.run([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-            "-i", concat_list,
-            "-ac", "1", "-ar", "22050",
+            "ffmpeg", "-y", "-f", "s16le", "-ar", str(SAMPLE_RATE), "-ac", "1",
+            "-i", pcm_path,
             "-c:a", "libmp3lame", "-b:a", "32k",
             output_path,
         ], capture_output=True, check=True)

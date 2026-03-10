@@ -550,15 +550,16 @@ HTML_PAGE = """\
       fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
         .then(function(r) {
           if (r.redirected) {
-            // File is ready — download it
-            return fetch(r.url).then(function(r2) { return r2.blob(); }).then(function(blob) {
-              toast.remove();
-              var a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = shortId + "_translation.mp3";
-              a.click();
-              URL.revokeObjectURL(a.href);
-            });
+            // File is ready — show download link (browser handles download natively)
+            toast.style.background = "#d4edda";
+            toast.style.color = "#155724";
+            toast.innerHTML = "Audio ready: <a href=\\x27" + r.url + "\\x27 download=\\x27" + shortId + "_translation.mp3\\x27 style=\\x27color:#155724;font-weight:bold\\x27>Download MP3</a>";
+            // Also trigger the download automatically
+            var a = document.createElement("a");
+            a.href = r.url;
+            a.download = shortId + "_translation.mp3";
+            a.click();
+            return;
           }
           if (r.status === 202) {
             // Still building — poll again in 5 seconds
