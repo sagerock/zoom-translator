@@ -383,7 +383,7 @@ HTML_PAGE = """\
       var dlHtml = "";
       if (b.clip_count > 0) {
         dlHtml = '<div class="dl-links">' +
-          '<a href="#" onclick="downloadMp3(\\x27' + b.bot_id + '\\x27);return false;">Audio MP3</a>' +
+          '<a href="#" data-mp3-bot="' + b.bot_id + '" onclick="downloadMp3(\\x27' + b.bot_id + '\\x27);return false;">Audio MP3</a>' +
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
           '(' + b.clip_count + ' clips)' +
@@ -469,7 +469,7 @@ HTML_PAGE = """\
             '<strong>' + shortId + '</strong> ' +
             '<span style="color:#888">' + info + '</span>' +
             '<div class="dl-links">' +
-              '<a href="#" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
+              '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
             '</div>' +
@@ -503,7 +503,7 @@ HTML_PAGE = """\
             '<span style="color:#e74c3c;font-size:.75rem;">user:' + userId + '</span>' +
             '<div style="color:#888;font-size:.8rem;">' + info + (dateStr ? " &middot; " + dateStr : "") + '</div>' +
             '<div class="dl-links">' +
-              '<a href="#" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
+              '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
             '</div>' +
@@ -536,42 +536,42 @@ HTML_PAGE = """\
   // Download timeline-synced MP3 (background build + polling)
   window.downloadMp3 = function(botId) {
     var shortId = botId.substring(0, 8);
-    if (document.getElementById("dl-progress-" + shortId)) return; // already in progress
-
-    var toast = document.createElement("div");
-    toast.className = "error-toast";
-    toast.id = "dl-progress-" + shortId;
-    toast.style.background = "#d1ecf1";
-    toast.style.color = "#0c5460";
-    toast.textContent = "Generating synced audio for " + shortId + "... this may take a few minutes for large recordings";
-    errorsEl.appendChild(toast);
+    // Find the "Audio MP3" link that triggered this and update it in-place
+    var linkEl = document.querySelector("[data-mp3-bot=\\x27" + botId + "\\x27]");
+    if (!linkEl) return;
+    if (linkEl.dataset.mp3Status === "building") return; // already in progress
+    linkEl.dataset.mp3Status = "building";
+    linkEl.textContent = "Building MP3...";
+    linkEl.style.color = "#0c5460";
+    linkEl.onclick = function(e) { e.preventDefault(); };
 
     function poll() {
       fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
         .then(function(r) {
           if (r.redirected) {
-            // File is ready — show download link (browser handles download natively)
-            toast.style.background = "#d4edda";
-            toast.style.color = "#155724";
-            toast.innerHTML = "Audio ready: <a href=\\x27" + r.url + "\\x27 download=\\x27" + shortId + "_translation.mp3\\x27 style=\\x27color:#155724;font-weight:bold\\x27>Download MP3</a>";
-            // Also trigger the download automatically
-            var a = document.createElement("a");
-            a.href = r.url;
-            a.download = shortId + "_translation.mp3";
-            a.click();
+            // File is ready — replace link with direct download
+            linkEl.href = r.url;
+            linkEl.textContent = "Download MP3";
+            linkEl.style.color = "";
+            linkEl.style.fontWeight = "bold";
+            linkEl.target = "_blank";
+            linkEl.rel = "noopener";
+            linkEl.onclick = null;
+            delete linkEl.dataset.mp3Status;
             return;
           }
           if (r.status === 202) {
-            // Still building — poll again in 5 seconds
-            toast.textContent = "Building synced audio for " + shortId + "... please wait";
             setTimeout(poll, 5000);
             return;
           }
           throw new Error("Server error " + r.status);
         })
         .catch(function() {
-          toast.remove();
-          showError("Failed to download audio for " + shortId);
+          linkEl.textContent = "Audio MP3";
+          linkEl.style.color = "#e74c3c";
+          linkEl.onclick = function(e) { e.preventDefault(); downloadMp3(botId); };
+          delete linkEl.dataset.mp3Status;
+          showError("Failed to build audio for " + shortId);
         });
     }
     poll();
