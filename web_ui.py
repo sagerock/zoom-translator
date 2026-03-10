@@ -533,36 +533,47 @@ HTML_PAGE = """\
       .catch(function() { showError("Failed to download " + filename); });
   };
 
-  // Download timeline-synced MP3 (generated server-side, redirects to signed URL)
+  // Download timeline-synced MP3 (background build + polling)
   window.downloadMp3 = function(botId) {
     var shortId = botId.substring(0, 8);
+    if (document.getElementById("dl-progress-" + shortId)) return; // already in progress
+
     var toast = document.createElement("div");
     toast.className = "error-toast";
+    toast.id = "dl-progress-" + shortId;
     toast.style.background = "#d1ecf1";
     toast.style.color = "#0c5460";
-    toast.textContent = "Generating synced audio for " + shortId + "... this may take a minute for large recordings";
+    toast.textContent = "Generating synced audio for " + shortId + "... this may take a few minutes for large recordings";
     errorsEl.appendChild(toast);
 
-    fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
-      .then(function(r) {
-        if (r.redirected) {
-          return fetch(r.url).then(function(r2) { return r2.blob(); });
-        }
-        if (!r.ok) throw new Error("Server error " + r.status);
-        return r.blob();
-      })
-      .then(function(blob) {
-        toast.remove();
-        var a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = shortId + "_translation.mp3";
-        a.click();
-        URL.revokeObjectURL(a.href);
-      })
-      .catch(function() {
-        toast.remove();
-        showError("Failed to download audio");
-      });
+    function poll() {
+      fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
+        .then(function(r) {
+          if (r.redirected) {
+            // File is ready — download it
+            return fetch(r.url).then(function(r2) { return r2.blob(); }).then(function(blob) {
+              toast.remove();
+              var a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = shortId + "_translation.mp3";
+              a.click();
+              URL.revokeObjectURL(a.href);
+            });
+          }
+          if (r.status === 202) {
+            // Still building — poll again in 5 seconds
+            toast.textContent = "Building synced audio for " + shortId + "... please wait";
+            setTimeout(poll, 5000);
+            return;
+          }
+          throw new Error("Server error " + r.status);
+        })
+        .catch(function() {
+          toast.remove();
+          showError("Failed to download audio for " + shortId);
+        });
+    }
+    poll();
   };
 
   // Periodic refresh of recordings

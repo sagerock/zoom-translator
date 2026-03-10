@@ -68,6 +68,9 @@ mgmt_clients: dict[ServerConnection, dict] = {}
 # target_lang → set of WebSocket connections (listener browsers)
 listener_clients: dict[str, set[ServerConnection]] = {}
 
+# bot_ids currently building a synced MP3 (prevents duplicate builds)
+_synced_builds: set[str] = {}
+
 
 # ── Auth helpers ───────────────────────────────────────────────────────
 
@@ -268,6 +271,19 @@ async def _build_synced_srt(owner_id: str, bot_id: str) -> str:
     return srt
 
 
+async def _background_build_synced(owner_id: str, bot_id: str) -> None:
+    """Build synced MP3 in the background and upload to storage."""
+    try:
+        mp3_bytes = await _build_synced_mp3(owner_id, bot_id)
+        synced_path = f"{owner_id}/{bot_id}/synced.mp3"
+        await supabase_client.upload_or_update_file(synced_path, mp3_bytes, "audio/mpeg")
+        log.info("Background synced MP3 uploaded for %s", bot_id[:8])
+    except Exception:
+        log.exception("Background synced MP3 build failed for %s", bot_id[:8])
+    finally:
+        _synced_builds.discard(bot_id)
+
+
 # ── HTTP request handler (serves web UI) ──────────────────────────────
 
 async def process_request(connection: ServerConnection, request: Request) -> Response | None:
@@ -341,7 +357,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response.headers["Content-Type"] = "application/json"
         return response
 
-    # API: generate timeline-synced MP3 from all clips
+    # API: timeline-synced MP3 — check/build/redirect
     if request.path.startswith("/api/recordings/") and request.path.endswith("/audio"):
         user = await _extract_user_from_header(request)
         if not user:
@@ -355,19 +371,28 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             if not session or (not admin and session.get("user_id") != user_id):
                 return connection.respond(403, "Forbidden")
             owner_id = session.get("user_id", user_id)
-            try:
-                mp3_bytes = await _build_synced_mp3(owner_id, bot_id)
-            except Exception:
-                log.exception("Failed to build synced MP3 for %s", bot_id)
-                return connection.respond(500, "Failed to generate audio")
-            # Upload synced MP3 to storage and redirect (websockets can't serve binary)
             synced_path = f"{owner_id}/{bot_id}/synced.mp3"
-            await supabase_client.upload_or_update_file(synced_path, mp3_bytes, "audio/mpeg")
+
+            # If synced.mp3 already exists → redirect immediately
             signed_url = await supabase_client.get_signed_url(synced_path)
-            if not signed_url:
-                return connection.respond(500, "Failed to create download URL")
-            response = connection.respond(302, "")
-            response.headers["Location"] = signed_url
+            if signed_url:
+                response = connection.respond(302, "")
+                response.headers["Location"] = signed_url
+                return response
+
+            # If a build is already in progress → return 202
+            if bot_id in _synced_builds:
+                body = json.dumps({"status": "building"})
+                response = connection.respond(202, body)
+                response.headers["Content-Type"] = "application/json"
+                return response
+
+            # Start background build
+            _synced_builds.add(bot_id)
+            asyncio.create_task(_background_build_synced(owner_id, bot_id))
+            body = json.dumps({"status": "building"})
+            response = connection.respond(202, body)
+            response.headers["Content-Type"] = "application/json"
             return response
         return connection.respond(404, "Not Found")
 
