@@ -337,9 +337,14 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             except Exception:
                 log.exception("Failed to build synced MP3 for %s", bot_id)
                 return connection.respond(500, "Failed to generate audio")
-            response = connection.respond(200, mp3_bytes)
-            response.headers["Content-Type"] = "audio/mpeg"
-            response.headers["Content-Disposition"] = f'attachment; filename="{bot_id[:8]}_translation.mp3"'
+            # Upload synced MP3 to storage and redirect (websockets can't serve binary)
+            synced_path = f"{owner_id}/{bot_id}/synced.mp3"
+            await supabase_client.upload_or_update_file(synced_path, mp3_bytes, "audio/mpeg")
+            signed_url = await supabase_client.get_signed_url(synced_path)
+            if not signed_url:
+                return connection.respond(500, "Failed to create download URL")
+            response = connection.respond(302, "")
+            response.headers["Location"] = signed_url
             return response
         return connection.respond(404, "Not Found")
 

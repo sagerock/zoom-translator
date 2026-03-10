@@ -533,7 +533,7 @@ HTML_PAGE = """\
       .catch(function() { showError("Failed to download " + filename); });
   };
 
-  // Download timeline-synced MP3 (generated server-side)
+  // Download timeline-synced MP3 (generated server-side, redirects to signed URL)
   window.downloadMp3 = function(botId) {
     var shortId = botId.substring(0, 8);
     var toast = document.createElement("div");
@@ -543,8 +543,11 @@ HTML_PAGE = """\
     toast.textContent = "Generating synced audio for " + shortId + "... this may take a minute for large recordings";
     errorsEl.appendChild(toast);
 
-    fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders()})
+    fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
       .then(function(r) {
+        if (r.redirected) {
+          return fetch(r.url).then(function(r2) { return r2.blob(); });
+        }
         if (!r.ok) throw new Error("Server error " + r.status);
         return r.blob();
       })

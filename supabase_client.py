@@ -163,6 +163,18 @@ async def upload_text_file(user_id: str, bot_id: str, filename: str, text: str) 
         log.exception("Failed to upload text file %s", path)
 
 
+async def upload_or_update_file(path: str, data: bytes, content_type: str) -> None:
+    """Upload a file to storage, replacing it if it already exists."""
+    try:
+        await asyncio.to_thread(
+            lambda: _client.storage.from_(BUCKET).upload(
+                path, data, {"content-type": content_type, "upsert": "true"}
+            )
+        )
+    except Exception:
+        log.exception("Failed to upload/update %s", path)
+
+
 async def get_signed_url(path: str, expires_in: int = 3600) -> str | None:
     """Generate a signed download URL for a storage object."""
     try:
