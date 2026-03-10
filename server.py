@@ -92,60 +92,72 @@ async def _build_synced_mp3(owner_id: str, bot_id: str) -> bytes:
     """Download all clips, read transcript timing, and build a single
     timeline-synced MP3 using ffmpeg with silence gaps."""
 
-    # 1. Get signed URL for transcript.jsonl and all clips
-    transcript_url = await supabase_client.get_signed_url(
-        f"{owner_id}/{bot_id}/transcript.jsonl"
-    )
-    if not transcript_url:
-        raise ValueError("transcript.jsonl not found")
+    # Suppress httpx request logging during bulk downloads
+    httpx_logger = logging.getLogger("httpx")
+    prev_level = httpx_logger.level
+    httpx_logger.setLevel(logging.WARNING)
 
-    # 2. Download transcript to get elapsed timestamps
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(transcript_url)
-        resp.raise_for_status()
-    entries = []
-    for line in resp.text.strip().split("\n"):
-        if line.strip():
-            entries.append(json.loads(line))
-    entries.sort(key=lambda e: e["n"])
+    try:
+        # 1. Get signed URL for transcript.jsonl
+        transcript_url = await supabase_client.get_signed_url(
+            f"{owner_id}/{bot_id}/transcript.jsonl"
+        )
+        if not transcript_url:
+            raise ValueError("transcript.jsonl not found")
 
-    if not entries:
-        raise ValueError("No entries in transcript")
+        # 2. Download transcript to get elapsed timestamps
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(transcript_url)
+            resp.raise_for_status()
+        entries = []
+        for line in resp.text.strip().split("\n"):
+            if line.strip():
+                entries.append(json.loads(line))
+        entries.sort(key=lambda e: e["n"])
 
-    clip_count = len(entries)
-    log.info("Building synced MP3 for %s: %d clips", bot_id[:8], clip_count)
+        if not entries:
+            raise ValueError("No entries in transcript")
 
-    # 3. Get signed URLs for all clips (batched)
-    BATCH = 20
-    clip_urls = {}
-    for batch_start in range(1, clip_count + 1, BATCH):
-        batch_end = min(batch_start + BATCH, clip_count + 1)
-        tasks = {
-            i: supabase_client.get_signed_url(f"{owner_id}/{bot_id}/clip_{i:04d}.mp3")
-            for i in range(batch_start, batch_end)
-        }
-        results = await asyncio.gather(*tasks.values())
-        for i, url in zip(tasks.keys(), results):
-            if url:
-                clip_urls[i] = url
+        clip_count = len(entries)
+        log.info("Building synced MP3 for %s: %d clips", bot_id[:8], clip_count)
 
-    # 4. Download all clips (batched)
-    DL_BATCH = 10
-    clip_data: dict[int, bytes] = {}
-    clip_nums = sorted(clip_urls.keys())
+        # 3. Get signed URLs for all clips (batched)
+        BATCH = 20
+        clip_urls = {}
+        for batch_start in range(1, clip_count + 1, BATCH):
+            batch_end = min(batch_start + BATCH, clip_count + 1)
+            tasks = {
+                i: supabase_client.get_signed_url(f"{owner_id}/{bot_id}/clip_{i:04d}.mp3")
+                for i in range(batch_start, batch_end)
+            }
+            results = await asyncio.gather(*tasks.values())
+            for i, url in zip(tasks.keys(), results):
+                if url:
+                    clip_urls[i] = url
 
-    async with httpx.AsyncClient() as client:
-        for batch_start in range(0, len(clip_nums), DL_BATCH):
-            batch = clip_nums[batch_start:batch_start + DL_BATCH]
+        log.info("Signed URLs ready for %s: %d/%d", bot_id[:8], len(clip_urls), clip_count)
 
-            async def _download(n: int) -> tuple[int, bytes]:
-                r = await client.get(clip_urls[n])
-                r.raise_for_status()
-                return n, r.content
+        # 4. Download all clips (batched)
+        DL_BATCH = 10
+        clip_data: dict[int, bytes] = {}
+        clip_nums = sorted(clip_urls.keys())
 
-            results = await asyncio.gather(*[_download(n) for n in batch])
-            for n, data in results:
-                clip_data[n] = data
+        async with httpx.AsyncClient() as client:
+            for batch_start in range(0, len(clip_nums), DL_BATCH):
+                batch = clip_nums[batch_start:batch_start + DL_BATCH]
+
+                async def _download(n: int) -> tuple[int, bytes]:
+                    r = await client.get(clip_urls[n])
+                    r.raise_for_status()
+                    return n, r.content
+
+                results = await asyncio.gather(*[_download(n) for n in batch])
+                for n, data in results:
+                    clip_data[n] = data
+
+        log.info("Clips downloaded for %s: %d clips", bot_id[:8], len(clip_data))
+    finally:
+        httpx_logger.setLevel(prev_level)
 
     # 5. Build the synced MP3 with ffmpeg in a temp directory
     mp3_bytes = await asyncio.to_thread(
@@ -156,23 +168,41 @@ async def _build_synced_mp3(owner_id: str, bot_id: str) -> bytes:
 
 
 def _ffmpeg_build_synced(entries: list[dict], clip_data: dict[int, bytes]) -> bytes:
-    """Use ffmpeg to place clips at their elapsed timestamps with silence gaps."""
+    """Use ffmpeg to place clips at their elapsed timestamps with silence gaps.
+
+    Uses a single pre-generated silence file with duration directives in the
+    concat list, instead of generating individual silence files per gap.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write each clip to a temp file
         for n, data in clip_data.items():
             with open(os.path.join(tmpdir, f"clip_{n:04d}.mp3"), "wb") as f:
                 f.write(data)
 
-        # Build ffmpeg concat file with silence gaps
-        # We'll create silence segments between clips
-        total_elapsed = entries[-1]["elapsed"]
-        # Estimate last clip duration from audio_end - audio_start
-        last_entry = entries[-1]
-        last_clip_dur = last_entry.get("audio_end", 0) - last_entry.get("audio_start", 0)
-        total_duration = total_elapsed + max(last_clip_dur, 1.0)
+        # Find the max gap to determine silence file length
+        prev_end = 0.0
+        max_gap = 0.0
+        for entry in entries:
+            if entry["n"] not in clip_data:
+                continue
+            gap = entry["elapsed"] - prev_end
+            if gap > max_gap:
+                max_gap = gap
+            clip_dur = entry.get("audio_end", 0) - entry.get("audio_start", 0)
+            prev_end = entry["elapsed"] + clip_dur
 
-        # Build a filter that delays each clip to its elapsed position and mixes them
-        # For large numbers of clips, we use a concat approach with silence instead
+        # Generate ONE silence file covering the max gap
+        silence_path = os.path.join(tmpdir, "silence.mp3")
+        silence_dur = max(max_gap + 1.0, 2.0)
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi",
+            "-i", f"anullsrc=r=44100:cl=mono",
+            "-t", f"{silence_dur:.3f}",
+            "-c:a", "libmp3lame", "-b:a", "32k",
+            silence_path,
+        ], capture_output=True, check=True)
+
+        # Build concat list using duration directives to trim the silence file
         concat_list = os.path.join(tmpdir, "concat.txt")
         prev_end = 0.0
 
@@ -184,18 +214,11 @@ def _ffmpeg_build_synced(entries: list[dict], clip_data: dict[int, bytes]) -> by
                 elapsed = entry["elapsed"]
                 clip_dur = entry.get("audio_end", 0) - entry.get("audio_start", 0)
 
-                # Insert silence gap if needed
+                # Insert silence gap if needed (reuse single silence file)
                 gap = elapsed - prev_end
-                if gap > 0.05:  # skip tiny gaps
-                    silence_path = os.path.join(tmpdir, f"silence_{n:04d}.mp3")
-                    subprocess.run([
-                        "ffmpeg", "-y", "-f", "lavfi",
-                        "-i", f"anullsrc=r=44100:cl=mono",
-                        "-t", f"{gap:.3f}",
-                        "-c:a", "libmp3lame", "-b:a", "64k",
-                        silence_path,
-                    ], capture_output=True, check=True)
+                if gap > 0.05:
                     f.write(f"file '{silence_path}'\n")
+                    f.write(f"duration {gap:.3f}\n")
 
                 clip_path = os.path.join(tmpdir, f"clip_{n:04d}.mp3")
                 f.write(f"file '{clip_path}'\n")
