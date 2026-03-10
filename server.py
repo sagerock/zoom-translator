@@ -239,12 +239,13 @@ def _ffmpeg_build_synced(entries: list[dict], clip_data: dict[int, bytes]) -> by
                 f.write(f"file '{clip_path}'\n")
                 prev_end = elapsed + clip_dur
 
-        # Concatenate everything into final MP3
+        # Concatenate everything into final MP3 (mono 32kbps keeps file small)
         output_path = os.path.join(tmpdir, "output.mp3")
         subprocess.run([
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", concat_list,
-            "-c:a", "libmp3lame", "-b:a", "64k",
+            "-ac", "1", "-ar", "22050",
+            "-c:a", "libmp3lame", "-b:a", "32k",
             output_path,
         ], capture_output=True, check=True)
 
