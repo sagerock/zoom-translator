@@ -383,6 +383,13 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             if not session or (not admin and session.get("user_id") != user_id):
                 return connection.respond(403, "Forbidden")
             owner_id = session.get("user_id", user_id)
+            # If a build is already in progress → return 202 (skip storage check)
+            if bot_id in _synced_builds:
+                body = json.dumps({"status": "building"})
+                response = connection.respond(202, body)
+                response.headers["Content-Type"] = "application/json"
+                return response
+
             synced_path = f"{owner_id}/{bot_id}/synced.mp3"
 
             # If synced.mp3 already exists → redirect immediately
@@ -390,13 +397,6 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             if signed_url:
                 response = connection.respond(302, "")
                 response.headers["Location"] = signed_url
-                return response
-
-            # If a build is already in progress → return 202
-            if bot_id in _synced_builds:
-                body = json.dumps({"status": "building"})
-                response = connection.respond(202, body)
-                response.headers["Content-Type"] = "application/json"
                 return response
 
             # Start background build
