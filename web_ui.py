@@ -533,31 +533,55 @@ HTML_PAGE = """\
       .catch(function() { showError("Failed to download " + filename); });
   };
 
+  // Track resolved synced MP3 URLs and in-progress builds so periodic
+  // DOM refreshes can restore the link state after innerHTML rebuild.
+  var mp3Urls = {};      // botId -> signed URL
+  var mp3Building = {};  // botId -> true
+
+  function applyMp3State() {
+    // Re-apply resolved/building state to freshly rendered links
+    Object.keys(mp3Urls).forEach(function(botId) {
+      var el = document.querySelector("[data-mp3-bot=\\x27" + botId + "\\x27]");
+      if (el) {
+        el.href = mp3Urls[botId];
+        el.textContent = "Download MP3";
+        el.style.fontWeight = "bold";
+        el.target = "_blank";
+        el.rel = "noopener";
+        el.onclick = function(e) { /* allow default navigation */ };
+      }
+    });
+    Object.keys(mp3Building).forEach(function(botId) {
+      if (mp3Urls[botId]) return; // already resolved
+      var el = document.querySelector("[data-mp3-bot=\\x27" + botId + "\\x27]");
+      if (el) {
+        el.textContent = "Building MP3...";
+        el.style.color = "#0c5460";
+        el.onclick = function(e) { e.preventDefault(); };
+      }
+    });
+  }
+
   // Download timeline-synced MP3 (background build + polling)
   window.downloadMp3 = function(botId) {
     var shortId = botId.substring(0, 8);
-    // Find the "Audio MP3" link that triggered this and update it in-place
+    if (mp3Building[botId] || mp3Urls[botId]) return;
+    mp3Building[botId] = true;
+
     var linkEl = document.querySelector("[data-mp3-bot=\\x27" + botId + "\\x27]");
-    if (!linkEl) return;
-    if (linkEl.dataset.mp3Status === "building") return; // already in progress
-    linkEl.dataset.mp3Status = "building";
-    linkEl.textContent = "Building MP3...";
-    linkEl.style.color = "#0c5460";
-    linkEl.onclick = function(e) { e.preventDefault(); };
+    if (linkEl) {
+      linkEl.textContent = "Building MP3...";
+      linkEl.style.color = "#0c5460";
+      linkEl.onclick = function(e) { e.preventDefault(); };
+    }
 
     function poll() {
       fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
         .then(function(r) {
           if (r.redirected) {
-            // File is ready — replace link with direct download
-            linkEl.href = r.url;
-            linkEl.textContent = "Download MP3";
-            linkEl.style.color = "";
-            linkEl.style.fontWeight = "bold";
-            linkEl.target = "_blank";
-            linkEl.rel = "noopener";
-            linkEl.onclick = null;
-            delete linkEl.dataset.mp3Status;
+            mp3Urls[botId] = r.url;
+            delete mp3Building[botId];
+            applyMp3State();
             return;
           }
           if (r.status === 202) {
@@ -567,20 +591,18 @@ HTML_PAGE = """\
           throw new Error("Server error " + r.status);
         })
         .catch(function() {
-          linkEl.textContent = "Audio MP3";
-          linkEl.style.color = "#e74c3c";
-          linkEl.onclick = function(e) { e.preventDefault(); downloadMp3(botId); };
-          delete linkEl.dataset.mp3Status;
+          delete mp3Building[botId];
           showError("Failed to build audio for " + shortId);
         });
     }
     poll();
   };
 
-  // Periodic refresh of recordings
+  // Periodic refresh of recordings (restore MP3 link state after rebuild)
   setInterval(function() {
     loadRecordings();
     if (isAdmin) loadAdminSessions();
+    setTimeout(applyMp3State, 500);
   }, 15000);
 })();
 </script>
