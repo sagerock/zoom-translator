@@ -170,12 +170,17 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             # Use the session owner's user_id for storage path
             owner_id = session.get("user_id", user_id)
             clip_count = session.get("clip_count", 0)
+            # Generate all signed URLs concurrently (batched to avoid overwhelming Supabase)
+            BATCH = 20
             urls = []
-            for i in range(1, clip_count + 1):
-                path = f"{owner_id}/{bot_id}/clip_{i:04d}.mp3"
-                url = await supabase_client.get_signed_url(path)
-                if url:
-                    urls.append(url)
+            for batch_start in range(1, clip_count + 1, BATCH):
+                batch_end = min(batch_start + BATCH, clip_count + 1)
+                tasks = [
+                    supabase_client.get_signed_url(f"{owner_id}/{bot_id}/clip_{i:04d}.mp3")
+                    for i in range(batch_start, batch_end)
+                ]
+                results = await asyncio.gather(*tasks)
+                urls.extend(u for u in results if u)
             payload = json.dumps({"urls": urls})
             response = connection.respond(200, payload)
             response.headers["Content-Type"] = "application/json"
