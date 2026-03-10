@@ -287,11 +287,13 @@ async def _background_build_synced(owner_id: str, bot_id: str) -> None:
     """Build synced MP3 in the background and upload to storage."""
     try:
         mp3_bytes = await _build_synced_mp3(owner_id, bot_id)
+        log.info("Synced MP3 ready for %s: %.1f MB — uploading to storage",
+                 bot_id[:8], len(mp3_bytes) / 1_000_000)
         synced_path = f"{owner_id}/{bot_id}/synced.mp3"
         await supabase_client.upload_or_update_file(synced_path, mp3_bytes, "audio/mpeg")
-        log.info("Background synced MP3 uploaded for %s", bot_id[:8])
+        log.info("Background synced MP3 uploaded successfully for %s", bot_id[:8])
     except Exception:
-        log.exception("Background synced MP3 build failed for %s", bot_id[:8])
+        log.exception("Background synced MP3 build/upload FAILED for %s", bot_id[:8])
     finally:
         _synced_builds.discard(bot_id)
 
