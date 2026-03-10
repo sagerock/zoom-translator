@@ -57,14 +57,21 @@ class BotSession:
 # bot_id → BotSession
 bot_sessions: dict[str, BotSession] = {}
 
-# Connected management UI WebSocket clients: ws → user_id
-mgmt_clients: dict[ServerConnection, str] = {}
+# Connected management UI WebSocket clients: ws → {user_id, is_admin}
+mgmt_clients: dict[ServerConnection, dict] = {}
 
 # target_lang → set of WebSocket connections (listener browsers)
 listener_clients: dict[str, set[ServerConnection]] = {}
 
 
 # ── Auth helpers ───────────────────────────────────────────────────────
+
+ADMIN_EMAILS = {"sage@sagerock.com"}
+
+
+def _is_admin(user: dict) -> bool:
+    return user.get("email", "").lower() in ADMIN_EMAILS
+
 
 async def _extract_user_from_header(request: Request) -> dict | None:
     """Extract and verify JWT from Authorization header."""
@@ -123,23 +130,49 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response.headers["Content-Type"] = "application/json"
         return response
 
+    # API: admin — list all sessions across all users
+    if request.path == "/api/admin/sessions":
+        user = await _extract_user_from_header(request)
+        if not user or not _is_admin(user):
+            return connection.respond(403, "Forbidden")
+        sessions = await supabase_client.get_all_sessions()
+        recordings = []
+        for s in sessions:
+            if s.get("clip_count", 0) > 0:
+                recordings.append({
+                    "bot_id": s["bot_id"],
+                    "user_id": s.get("user_id", ""),
+                    "clips": s["clip_count"],
+                    "duration": s.get("duration"),
+                    "status": s.get("status"),
+                    "source_lang": s.get("source_lang", ""),
+                    "target_lang": s.get("target_lang", ""),
+                    "created_at": s.get("created_at", ""),
+                })
+        body = json.dumps(recordings)
+        response = connection.respond(200, body)
+        response.headers["Content-Type"] = "application/json"
+        return response
+
     # API: get signed URLs for all audio clips
     if request.path.startswith("/api/recordings/") and request.path.endswith("/audio"):
         user = await _extract_user_from_header(request)
         if not user:
             return connection.respond(401, "Unauthorized")
         user_id = user["sub"]
+        admin = _is_admin(user)
         parts = request.path.strip("/").split("/")
         if len(parts) == 4:
             bot_id = parts[2]
-            # Verify ownership
             session = await supabase_client.get_session_by_bot_id(bot_id)
-            if not session or session.get("user_id") != user_id:
+            if not session or (not admin and session.get("user_id") != user_id):
                 return connection.respond(403, "Forbidden")
+            # Use the session owner's user_id for storage path
+            owner_id = session.get("user_id", user_id)
             clip_count = session.get("clip_count", 0)
             urls = []
             for i in range(1, clip_count + 1):
-                path = f"{user_id}/{bot_id}/clip_{i:04d}.mp3"
+                path = f"{owner_id}/{bot_id}/clip_{i:04d}.mp3"
                 url = await supabase_client.get_signed_url(path)
                 if url:
                     urls.append(url)
@@ -155,14 +188,15 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         if not user:
             return connection.respond(401, "Unauthorized")
         user_id = user["sub"]
+        admin = _is_admin(user)
         parts = request.path.strip("/").split("/")
         if len(parts) == 3:
             bot_id, filename = parts[1], parts[2]
-            # Verify ownership
             session = await supabase_client.get_session_by_bot_id(bot_id)
-            if not session or session.get("user_id") != user_id:
+            if not session or (not admin and session.get("user_id") != user_id):
                 return connection.respond(403, "Forbidden")
-            path = f"{user_id}/{bot_id}/{filename}"
+            owner_id = session.get("user_id", user_id)
+            path = f"{owner_id}/{bot_id}/{filename}"
             signed_url = await supabase_client.get_signed_url(path)
             if signed_url:
                 response = connection.respond(302, "")
@@ -176,10 +210,13 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
 
 # ── Management WebSocket broadcast ────────────────────────────────────
 
-def _sessions_snapshot(user_id: str) -> list[dict]:
-    """Return bot sessions belonging to a specific user."""
-    return [
-        {
+def _sessions_snapshot(user_id: str, admin: bool = False) -> list[dict]:
+    """Return bot sessions belonging to a specific user (or all if admin)."""
+    result = []
+    for s in bot_sessions.values():
+        if not admin and s.user_id != user_id:
+            continue
+        entry = {
             "bot_id": s.bot_id,
             "meeting_url": s.meeting_url,
             "source_lang": s.source_lang,
@@ -187,17 +224,19 @@ def _sessions_snapshot(user_id: str) -> list[dict]:
             "status": s.status,
             "clip_count": s.clip_count,
         }
-        for s in bot_sessions.values()
-        if s.user_id == user_id
-    ]
+        if admin:
+            entry["user_id"] = s.user_id
+        result.append(entry)
+    return result
 
 
 async def broadcast_status() -> None:
     """Send current bot status to all connected management clients, filtered by user."""
     stale = set()
-    for ws, user_id in mgmt_clients.items():
+    for ws, info in mgmt_clients.items():
         try:
-            msg = json.dumps({"type": "status", "bots": _sessions_snapshot(user_id)})
+            snapshot = _sessions_snapshot(info["user_id"], admin=info["is_admin"])
+            msg = json.dumps({"type": "status", "bots": snapshot})
             await ws.send(msg)
         except Exception:
             stale.add(ws)
@@ -210,11 +249,13 @@ async def broadcast_status() -> None:
 async def mgmt_handler(ws: ServerConnection, user: dict) -> None:
     """Handle management WebSocket connections from the web UI."""
     user_id = user["sub"]
-    mgmt_clients[ws] = user_id
-    log.info("Management client connected (user=%s)", user_id[:8])
+    admin = _is_admin(user)
+    mgmt_clients[ws] = {"user_id": user_id, "is_admin": admin}
+    log.info("Management client connected (user=%s, admin=%s)", user_id[:8], admin)
 
-    # Send current state immediately
-    await ws.send(json.dumps({"type": "status", "bots": _sessions_snapshot(user_id)}))
+    # Send current state immediately (include admin flag so UI can adapt)
+    snapshot = _sessions_snapshot(user_id, admin=admin)
+    await ws.send(json.dumps({"type": "status", "bots": snapshot, "is_admin": admin}))
 
     try:
         async for raw_msg in ws:
@@ -229,7 +270,7 @@ async def mgmt_handler(ws: ServerConnection, user: dict) -> None:
             if action == "start":
                 await _handle_start(ws, msg, user_id)
             elif action == "stop":
-                await _handle_stop(ws, msg, user_id)
+                await _handle_stop(ws, msg, user_id, admin)
             else:
                 await ws.send(json.dumps({"type": "error", "message": f"Unknown action: {action}"}))
 
@@ -285,15 +326,15 @@ async def _handle_start(ws: ServerConnection, msg: dict, user_id: str) -> None:
     await broadcast_status()
 
 
-async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str) -> None:
+async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: bool = False) -> None:
     bot_id = msg.get("bot_id", "").strip()
     session = bot_sessions.get(bot_id)
     if not session:
         await ws.send(json.dumps({"type": "error", "message": f"Unknown bot: {bot_id}"}))
         return
 
-    # Verify ownership
-    if session.user_id != user_id:
+    # Verify ownership (admins can stop any bot)
+    if not admin and session.user_id != user_id:
         await ws.send(json.dumps({"type": "error", "message": "Not authorized to stop this bot"}))
         return
 

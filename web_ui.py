@@ -188,6 +188,13 @@ HTML_PAGE = """\
     <label>Recordings</label>
     <div id="rec-list"><div class="empty">No recordings yet</div></div>
   </div>
+
+  <div id="admin-section" style="display:none;">
+    <div class="card" style="border-left: 3px solid #e74c3c;">
+      <label style="color:#e74c3c;">Admin: All Sessions</label>
+      <div id="admin-rec-list"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
 </div>
 </div>
 
@@ -295,6 +302,10 @@ HTML_PAGE = """\
   var connEl    = document.getElementById("conn-status");
   var errorsEl  = document.getElementById("errors");
 
+  var isAdmin = false;
+  var adminSection = document.getElementById("admin-section");
+  var adminRecList = document.getElementById("admin-rec-list");
+
   var ws = null;
   var reconnectTimer = null;
 
@@ -328,6 +339,13 @@ HTML_PAGE = """\
       try { msg = JSON.parse(ev.data); } catch(e) { return; }
 
       if (msg.type === "status") {
+        if (msg.is_admin !== undefined) {
+          isAdmin = msg.is_admin;
+          if (isAdmin) {
+            adminSection.style.display = "";
+            loadAdminSessions();
+          }
+        }
         renderBots(msg.bots);
       } else if (msg.type === "error") {
         showError(msg.message);
@@ -360,6 +378,7 @@ HTML_PAGE = """\
     for (var i = 0; i < bots.length; i++) {
       var b = bots[i];
       var shortId = b.bot_id.substring(0, 8);
+      var ownerHtml = (isAdmin && b.user_id) ? ' <span style="color:#e74c3c;font-size:.75rem;">user:' + b.user_id.substring(0,8) + '</span>' : '';
       var url = listenUrl(b.target_lang);
       var dlHtml = "";
       if (b.clip_count > 0) {
@@ -374,7 +393,7 @@ HTML_PAGE = """\
         '<div class="bot-info">' +
           '<span class="status-dot ' + b.status + '"></span>' +
           '<strong>' + b.source_lang.toUpperCase() + ' &rarr; ' + b.target_lang.toUpperCase() + '</strong> ' +
-          '<span class="bot-id">' + shortId + '</span> ' +
+          '<span class="bot-id">' + shortId + '</span> ' + ownerHtml +
           '<span>' + b.status + '</span>' +
           '<div class="listen-url">' + url + '</div>' +
           dlHtml +
@@ -461,6 +480,40 @@ HTML_PAGE = """\
     }).catch(function() {});
   }
 
+  function loadAdminSessions() {
+    if (!accessToken || !isAdmin) return;
+    fetch("/api/admin/sessions", {headers: authHeaders()}).then(function(r) { return r.json(); }).then(function(recs) {
+      if (!recs || recs.length === 0) {
+        adminRecList.innerHTML = '<div class="empty">No sessions found</div>';
+        return;
+      }
+      var html = "";
+      for (var i = 0; i < recs.length; i++) {
+        var r = recs[i];
+        var shortId = r.bot_id.substring(0, 8);
+        var userId = r.user_id ? r.user_id.substring(0, 8) : "?";
+        var langInfo = (r.source_lang || "?").toUpperCase() + " &rarr; " + (r.target_lang || "?").toUpperCase();
+        var info = r.clips + " clips";
+        if (r.duration) info += " &middot; " + formatDuration(r.duration);
+        var dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString() : "";
+        html += '<div class="bot-row">' +
+          '<div class="bot-info">' +
+            '<strong>' + langInfo + '</strong> ' +
+            '<span class="bot-id">' + shortId + '</span> ' +
+            '<span style="color:#e74c3c;font-size:.75rem;">user:' + userId + '</span>' +
+            '<div style="color:#888;font-size:.8rem;">' + info + (dateStr ? " &middot; " + dateStr : "") + '</div>' +
+            '<div class="dl-links">' +
+              '<a href="#" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
+              '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
+              '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }
+      adminRecList.innerHTML = html;
+    }).catch(function() {});
+  }
+
   // Download individual file via signed URL
   window.downloadFile = function(botId, filename) {
     fetch("/recordings/" + botId + "/" + filename, {headers: authHeaders()})
@@ -507,7 +560,10 @@ HTML_PAGE = """\
   };
 
   // Periodic refresh of recordings
-  setInterval(loadRecordings, 15000);
+  setInterval(function() {
+    loadRecordings();
+    if (isAdmin) loadAdminSessions();
+  }, 15000);
 })();
 </script>
 </body>

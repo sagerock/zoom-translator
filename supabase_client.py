@@ -102,6 +102,19 @@ async def get_user_sessions(user_id: str) -> list[dict]:
     return resp.data or []
 
 
+async def get_all_sessions() -> list[dict]:
+    """Return all sessions across all users, newest first (admin only)."""
+    resp = await asyncio.to_thread(
+        lambda: (
+            _client.table("bot_sessions")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    )
+    return resp.data or []
+
+
 async def get_session_by_bot_id(bot_id: str) -> dict | None:
     """Look up a single session by bot_id."""
     resp = await asyncio.to_thread(
