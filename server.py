@@ -214,6 +214,37 @@ def _ffmpeg_build_synced(entries: list[dict], clip_data: dict[int, bytes]) -> by
             return f.read()
 
 
+async def _build_synced_srt(owner_id: str, bot_id: str) -> str:
+    """Generate SRT with elapsed-based timestamps that sync with the meeting video."""
+    transcript_url = await supabase_client.get_signed_url(
+        f"{owner_id}/{bot_id}/transcript.jsonl"
+    )
+    if not transcript_url:
+        raise ValueError("transcript.jsonl not found")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(transcript_url)
+        resp.raise_for_status()
+
+    entries = []
+    for line in resp.text.strip().split("\n"):
+        if line.strip():
+            entries.append(json.loads(line))
+    entries.sort(key=lambda e: e["n"])
+
+    srt = ""
+    for entry in entries:
+        n = entry["n"]
+        start = entry["elapsed"]
+        clip_dur = entry.get("audio_end", 0) - entry.get("audio_start", 0)
+        end = start + max(clip_dur, 0.5)
+        srt += f"{n}\n"
+        srt += f"{_format_srt_time(start)} --> {_format_srt_time(end)}\n"
+        srt += f"{entry.get('translated', '')}\n\n"
+
+    return srt
+
+
 # ── HTTP request handler (serves web UI) ──────────────────────────────
 
 async def process_request(connection: ServerConnection, request: Request) -> Response | None:
@@ -312,7 +343,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             return response
         return connection.respond(404, "Not Found")
 
-    # Download recordings: /recordings/<bot_id>/<filename> → redirect to signed URL
+    # Download recordings: /recordings/<bot_id>/<filename>
     if request.path.startswith("/recordings/"):
         user = await _extract_user_from_header(request)
         if not user:
@@ -326,6 +357,20 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             if not session or (not admin and session.get("user_id") != user_id):
                 return connection.respond(403, "Forbidden")
             owner_id = session.get("user_id", user_id)
+
+            # Generate synced SRT from transcript.jsonl elapsed timestamps
+            if filename == "subtitles.srt":
+                try:
+                    srt_text = await _build_synced_srt(owner_id, bot_id)
+                except Exception:
+                    log.exception("Failed to build synced SRT for %s", bot_id)
+                    return connection.respond(500, "Failed to generate subtitles")
+                response = connection.respond(200, srt_text)
+                response.headers["Content-Type"] = "text/plain; charset=utf-8"
+                response.headers["Content-Disposition"] = f'attachment; filename="{bot_id[:8]}_subtitles.srt"'
+                return response
+
+            # Other files (transcript.jsonl, etc.) → redirect to signed URL
             path = f"{owner_id}/{bot_id}/{filename}"
             signed_url = await supabase_client.get_signed_url(path)
             if signed_url:
