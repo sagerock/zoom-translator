@@ -533,69 +533,33 @@ HTML_PAGE = """\
       .catch(function() { showError("Failed to download " + filename); });
   };
 
-  // Download all clips as a single concatenated MP3 (batched to avoid overwhelming the browser)
+  // Download timeline-synced MP3 (generated server-side)
   window.downloadMp3 = function(botId) {
     var shortId = botId.substring(0, 8);
-    showError("Downloading " + shortId + "... fetching clip URLs");
+    var toast = document.createElement("div");
+    toast.className = "error-toast";
+    toast.style.background = "#d1ecf1";
+    toast.style.color = "#0c5460";
+    toast.textContent = "Generating synced audio for " + shortId + "... this may take a minute for large recordings";
+    errorsEl.appendChild(toast);
+
     fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders()})
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.urls || data.urls.length === 0) {
-          showError("No audio clips found");
-          return;
-        }
-        var urls = data.urls;
-        var total = urls.length;
-        var buffers = new Array(total);
-        var done = 0;
-        var BATCH = 6;
-
-        function updateProgress() {
-          var pct = Math.round((done / total) * 100);
-          var el = document.getElementById("dl-progress-" + shortId);
-          if (el) el.textContent = "Downloading " + shortId + "... " + done + "/" + total + " clips (" + pct + "%)";
-        }
-
-        // Replace the toast with a persistent progress indicator
-        var toasts = errorsEl.querySelectorAll(".error-toast");
-        if (toasts.length > 0) {
-          var last = toasts[toasts.length - 1];
-          last.id = "dl-progress-" + shortId;
-          last.style.background = "#d1ecf1";
-          last.style.color = "#0c5460";
-        }
-
-        function fetchBatch(startIdx) {
-          var end = Math.min(startIdx + BATCH, total);
-          var batch = [];
-          for (var i = startIdx; i < end; i++) {
-            (function(idx) {
-              batch.push(
-                fetch(urls[idx]).then(function(r) { return r.arrayBuffer(); }).then(function(buf) {
-                  buffers[idx] = buf;
-                  done++;
-                  updateProgress();
-                })
-              );
-            })(i);
-          }
-          return Promise.all(batch).then(function() {
-            if (end < total) return fetchBatch(end);
-          });
-        }
-
-        return fetchBatch(0).then(function() {
-          var blob = new Blob(buffers, {type: "audio/mpeg"});
-          var a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = shortId + "_translation.mp3";
-          a.click();
-          URL.revokeObjectURL(a.href);
-          var el = document.getElementById("dl-progress-" + shortId);
-          if (el) el.remove();
-        });
+      .then(function(r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
+        return r.blob();
       })
-      .catch(function() { showError("Failed to download audio"); });
+      .then(function(blob) {
+        toast.remove();
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = shortId + "_translation.mp3";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      })
+      .catch(function() {
+        toast.remove();
+        showError("Failed to download audio");
+      });
   };
 
   // Periodic refresh of recordings

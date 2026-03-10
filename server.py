@@ -10,11 +10,16 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import signal
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, parse_qs
+
+import httpx
 
 import websockets
 from websockets.asyncio.server import serve, ServerConnection
@@ -79,6 +84,134 @@ async def _extract_user_from_header(request: Request) -> dict | None:
     if auth.startswith("Bearer "):
         return await supabase_client.verify_jwt(auth[7:])
     return None
+
+
+# ── Timeline-synced MP3 builder ────────────────────────────────────────
+
+async def _build_synced_mp3(owner_id: str, bot_id: str) -> bytes:
+    """Download all clips, read transcript timing, and build a single
+    timeline-synced MP3 using ffmpeg with silence gaps."""
+
+    # 1. Get signed URL for transcript.jsonl and all clips
+    transcript_url = await supabase_client.get_signed_url(
+        f"{owner_id}/{bot_id}/transcript.jsonl"
+    )
+    if not transcript_url:
+        raise ValueError("transcript.jsonl not found")
+
+    # 2. Download transcript to get elapsed timestamps
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(transcript_url)
+        resp.raise_for_status()
+    entries = []
+    for line in resp.text.strip().split("\n"):
+        if line.strip():
+            entries.append(json.loads(line))
+    entries.sort(key=lambda e: e["n"])
+
+    if not entries:
+        raise ValueError("No entries in transcript")
+
+    clip_count = len(entries)
+    log.info("Building synced MP3 for %s: %d clips", bot_id[:8], clip_count)
+
+    # 3. Get signed URLs for all clips (batched)
+    BATCH = 20
+    clip_urls = {}
+    for batch_start in range(1, clip_count + 1, BATCH):
+        batch_end = min(batch_start + BATCH, clip_count + 1)
+        tasks = {
+            i: supabase_client.get_signed_url(f"{owner_id}/{bot_id}/clip_{i:04d}.mp3")
+            for i in range(batch_start, batch_end)
+        }
+        results = await asyncio.gather(*tasks.values())
+        for i, url in zip(tasks.keys(), results):
+            if url:
+                clip_urls[i] = url
+
+    # 4. Download all clips (batched)
+    DL_BATCH = 10
+    clip_data: dict[int, bytes] = {}
+    clip_nums = sorted(clip_urls.keys())
+
+    async with httpx.AsyncClient() as client:
+        for batch_start in range(0, len(clip_nums), DL_BATCH):
+            batch = clip_nums[batch_start:batch_start + DL_BATCH]
+
+            async def _download(n: int) -> tuple[int, bytes]:
+                r = await client.get(clip_urls[n])
+                r.raise_for_status()
+                return n, r.content
+
+            results = await asyncio.gather(*[_download(n) for n in batch])
+            for n, data in results:
+                clip_data[n] = data
+
+    # 5. Build the synced MP3 with ffmpeg in a temp directory
+    mp3_bytes = await asyncio.to_thread(
+        _ffmpeg_build_synced, entries, clip_data
+    )
+    log.info("Synced MP3 built for %s: %.1f MB", bot_id[:8], len(mp3_bytes) / 1_000_000)
+    return mp3_bytes
+
+
+def _ffmpeg_build_synced(entries: list[dict], clip_data: dict[int, bytes]) -> bytes:
+    """Use ffmpeg to place clips at their elapsed timestamps with silence gaps."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Write each clip to a temp file
+        for n, data in clip_data.items():
+            with open(os.path.join(tmpdir, f"clip_{n:04d}.mp3"), "wb") as f:
+                f.write(data)
+
+        # Build ffmpeg concat file with silence gaps
+        # We'll create silence segments between clips
+        total_elapsed = entries[-1]["elapsed"]
+        # Estimate last clip duration from audio_end - audio_start
+        last_entry = entries[-1]
+        last_clip_dur = last_entry.get("audio_end", 0) - last_entry.get("audio_start", 0)
+        total_duration = total_elapsed + max(last_clip_dur, 1.0)
+
+        # Build a filter that delays each clip to its elapsed position and mixes them
+        # For large numbers of clips, we use a concat approach with silence instead
+        concat_list = os.path.join(tmpdir, "concat.txt")
+        prev_end = 0.0
+
+        with open(concat_list, "w") as f:
+            for entry in entries:
+                n = entry["n"]
+                if n not in clip_data:
+                    continue
+                elapsed = entry["elapsed"]
+                clip_dur = entry.get("audio_end", 0) - entry.get("audio_start", 0)
+
+                # Insert silence gap if needed
+                gap = elapsed - prev_end
+                if gap > 0.05:  # skip tiny gaps
+                    silence_path = os.path.join(tmpdir, f"silence_{n:04d}.mp3")
+                    subprocess.run([
+                        "ffmpeg", "-y", "-f", "lavfi",
+                        "-i", f"anullsrc=r=44100:cl=mono",
+                        "-t", f"{gap:.3f}",
+                        "-c:a", "libmp3lame", "-b:a", "64k",
+                        silence_path,
+                    ], capture_output=True, check=True)
+                    f.write(f"file '{silence_path}'\n")
+
+                clip_path = os.path.join(tmpdir, f"clip_{n:04d}.mp3")
+                f.write(f"file '{clip_path}'\n")
+                prev_end = elapsed + clip_dur
+
+        # Concatenate everything into final MP3
+        output_path = os.path.join(tmpdir, "output.mp3")
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", concat_list,
+            "-c:a", "libmp3lame", "-b:a", "64k",
+            output_path,
+        ], capture_output=True, check=True)
+
+        with open(output_path, "rb") as f:
+            return f.read()
 
 
 # ── HTTP request handler (serves web UI) ──────────────────────────────
@@ -154,7 +287,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response.headers["Content-Type"] = "application/json"
         return response
 
-    # API: get signed URLs for all audio clips
+    # API: generate timeline-synced MP3 from all clips
     if request.path.startswith("/api/recordings/") and request.path.endswith("/audio"):
         user = await _extract_user_from_header(request)
         if not user:
@@ -167,23 +300,15 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             session = await supabase_client.get_session_by_bot_id(bot_id)
             if not session or (not admin and session.get("user_id") != user_id):
                 return connection.respond(403, "Forbidden")
-            # Use the session owner's user_id for storage path
             owner_id = session.get("user_id", user_id)
-            clip_count = session.get("clip_count", 0)
-            # Generate all signed URLs concurrently (batched to avoid overwhelming Supabase)
-            BATCH = 20
-            urls = []
-            for batch_start in range(1, clip_count + 1, BATCH):
-                batch_end = min(batch_start + BATCH, clip_count + 1)
-                tasks = [
-                    supabase_client.get_signed_url(f"{owner_id}/{bot_id}/clip_{i:04d}.mp3")
-                    for i in range(batch_start, batch_end)
-                ]
-                results = await asyncio.gather(*tasks)
-                urls.extend(u for u in results if u)
-            payload = json.dumps({"urls": urls})
-            response = connection.respond(200, payload)
-            response.headers["Content-Type"] = "application/json"
+            try:
+                mp3_bytes = await _build_synced_mp3(owner_id, bot_id)
+            except Exception:
+                log.exception("Failed to build synced MP3 for %s", bot_id)
+                return connection.respond(500, "Failed to generate audio")
+            response = connection.respond(200, mp3_bytes)
+            response.headers["Content-Type"] = "audio/mpeg"
+            response.headers["Content-Disposition"] = f'attachment; filename="{bot_id[:8]}_translation.mp3"'
             return response
         return connection.respond(404, "Not Found")
 
