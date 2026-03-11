@@ -47,6 +47,10 @@ TTS_VOICES = {
     "zh": "nova",
 }
 
+# Deepgram owner/admin key for usage API (optional, needs usage:read scope)
+DEEPGRAM_ADMIN_KEY = os.getenv("DEEPGRAM_ADMIN_KEY", "")
+DEEPGRAM_PROJECT_ID = os.getenv("DEEPGRAM_PROJECT_ID", "")
+
 RECALL_API_BASE = "https://eu-central-1.recall.ai/api/v1"
 
 # Supabase

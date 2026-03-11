@@ -15,6 +15,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, parse_qs
@@ -386,6 +387,57 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                     "api_cost": s.get("api_cost"),
                 })
         body = json.dumps(recordings)
+        response = connection.respond(200, body)
+        response.headers["Content-Type"] = "application/json"
+        return response
+
+    # API: admin dashboard — aggregated cost/revenue summary
+    if request.path == "/api/admin/dashboard":
+        user = await _extract_user_from_header(request)
+        if not user or not _is_admin(user):
+            return connection.respond(403, "Forbidden")
+        sessions = await supabase_client.get_all_sessions()
+        total_duration = 0.0
+        total_api_cost = 0.0
+        total_sessions = 0
+        total_clips = 0
+        for s in sessions:
+            clips = s.get("clip_count", 0)
+            if clips > 0:
+                total_sessions += 1
+                total_clips += clips
+                total_duration += s.get("duration") or 0
+                total_api_cost += s.get("api_cost") or 0
+        total_minutes = total_duration / 60.0
+        total_revenue = total_minutes * 0.50
+        dashboard: dict[str, Any] = {
+            "total_sessions": total_sessions,
+            "total_clips": total_clips,
+            "total_minutes": round(total_minutes, 1),
+            "total_api_cost": round(total_api_cost, 2),
+            "total_revenue": round(total_revenue, 2),
+            "margin": round(total_revenue - total_api_cost, 2),
+        }
+        # Fetch live Deepgram usage if admin key is configured
+        if config.DEEPGRAM_ADMIN_KEY and config.DEEPGRAM_PROJECT_ID:
+            try:
+                now = datetime.now(timezone.utc)
+                month_start = now.replace(day=1).strftime("%Y-%m-%d")
+                month_end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(
+                        f"https://api.deepgram.com/v1/projects/{config.DEEPGRAM_PROJECT_ID}/usage/breakdown",
+                        params={"start": month_start, "end": month_end},
+                        headers={"Authorization": f"Token {config.DEEPGRAM_ADMIN_KEY}"},
+                    )
+                if resp.status_code == 200:
+                    dg_data = resp.json()
+                    dg_hours = sum(r.get("hours", 0) for r in dg_data.get("results", []))
+                    dashboard["deepgram_hours_this_month"] = round(dg_hours, 2)
+                    dashboard["deepgram_cost_this_month"] = round(dg_hours * 60 * DEEPGRAM_PER_MIN, 2)
+            except Exception:
+                log.exception("Failed to fetch Deepgram usage")
+        body = json.dumps(dashboard)
         response = connection.respond(200, body)
         response.headers["Content-Type"] = "application/json"
         return response

@@ -190,6 +190,10 @@ HTML_PAGE = """\
   </div>
 
   <div id="admin-section" style="display:none;">
+    <div class="card" style="border-left: 3px solid #8e44ad;">
+      <label style="color:#8e44ad;">Dashboard</label>
+      <div id="admin-dashboard"><div class="empty">Loading...</div></div>
+    </div>
     <div class="card" style="border-left: 3px solid #e74c3c;">
       <label style="color:#e74c3c;">Admin: All Sessions</label>
       <div id="admin-rec-list"><div class="empty">Loading...</div></div>
@@ -343,6 +347,7 @@ HTML_PAGE = """\
           isAdmin = msg.is_admin;
           if (isAdmin) {
             adminSection.style.display = "";
+            loadDashboard();
             loadAdminSessions();
           }
         }
@@ -486,6 +491,37 @@ HTML_PAGE = """\
     }).catch(function() {});
   }
 
+  var dashboardEl = document.getElementById("admin-dashboard");
+
+  function loadDashboard() {
+    if (!accessToken || !isAdmin) return;
+    fetch("/api/admin/dashboard", {headers: authHeaders()}).then(function(r) { return r.json(); }).then(function(d) {
+      var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:8px 0;">';
+      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
+        '<div style="font-size:1.8rem;font-weight:bold;color:#2c3e50;">' + d.total_sessions + '</div>' +
+        '<div style="font-size:.75rem;color:#888;">Sessions</div></div>';
+      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
+        '<div style="font-size:1.8rem;font-weight:bold;color:#2c3e50;">' + d.total_minutes + '</div>' +
+        '<div style="font-size:.75rem;color:#888;">Minutes</div></div>';
+      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
+        '<div style="font-size:1.8rem;font-weight:bold;color:#e74c3c;">$' + d.total_api_cost.toFixed(2) + '</div>' +
+        '<div style="font-size:.75rem;color:#888;">API Cost</div></div>';
+      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
+        '<div style="font-size:1.8rem;font-weight:bold;color:#27ae60;">$' + d.total_revenue.toFixed(2) + '</div>' +
+        '<div style="font-size:.75rem;color:#888;">Revenue</div></div>';
+      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
+        '<div style="font-size:1.8rem;font-weight:bold;color:#8e44ad;">$' + d.margin.toFixed(2) + '</div>' +
+        '<div style="font-size:.75rem;color:#888;">Margin</div></div>';
+      if (d.deepgram_hours_this_month != null) {
+        html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
+          '<div style="font-size:1.8rem;font-weight:bold;color:#2980b9;">' + d.deepgram_hours_this_month + 'h</div>' +
+          '<div style="font-size:.75rem;color:#888;">Deepgram (month)</div></div>';
+      }
+      html += '</div>';
+      dashboardEl.innerHTML = html;
+    }).catch(function() {});
+  }
+
   function loadAdminSessions() {
     if (!accessToken || !isAdmin) return;
     fetch("/api/admin/sessions", {headers: authHeaders()}).then(function(r) { return r.json(); }).then(function(recs) {
@@ -613,7 +649,7 @@ HTML_PAGE = """\
   // Periodic refresh of recordings (restore MP3 link state after rebuild)
   setInterval(function() {
     loadRecordings();
-    if (isAdmin) loadAdminSessions();
+    if (isAdmin) { loadDashboard(); loadAdminSessions(); }
     setTimeout(applyMp3State, 500);
   }, 15000);
 })();
