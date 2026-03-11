@@ -777,20 +777,20 @@ HTML_PAGE = """\
 
   function renderUsers(users) {
     if (!users || users.length === 0) {
-      userListEl.innerHTML = \\x27<div class="empty">No users</div>\\x27;
+      userListEl.innerHTML = \x27<div class="empty">No users</div>\x27;
       return;
     }
-    var html = \\x27<table style="width:100%;border-collapse:collapse;font-size:.85rem;">\\x27;
-    html += \\x27<tr style="text-align:left;border-bottom:1px solid #444;"><th>Email</th><th>Created</th><th></th></tr>\\x27;
+    var html = \x27<table style="width:100%;border-collapse:collapse;font-size:.85rem;">\x27;
+    html += \x27<tr style="text-align:left;border-bottom:1px solid #444;"><th>Email</th><th>Created</th><th></th></tr>\x27;
     users.forEach(function(u) {
       var created = u.created_at ? new Date(u.created_at).toLocaleDateString() : "—";
-      html += \\x27<tr style="border-bottom:1px solid #333;">\\x27;
-      html += \\x27<td style="padding:6px 4px;">\\x27 + (u.email || "—") + \\x27</td>\\x27;
-      html += \\x27<td style="padding:6px 4px;color:#888;">\\x27 + created + \\x27</td>\\x27;
-      html += \\x27<td style="padding:6px 4px;text-align:right;"><button class="secondary" style="padding:2px 8px;font-size:.75rem;" onclick="window._deleteUser(\\x27 + "\\x27" + u.id + "\\x27" + \\x27)">Delete</button></td>\\x27;
-      html += \\x27</tr>\\x27;
+      html += \x27<tr style="border-bottom:1px solid #333;">\x27;
+      html += \x27<td style="padding:6px 4px;">\x27 + (u.email || "—") + \x27</td>\x27;
+      html += \x27<td style="padding:6px 4px;color:#888;">\x27 + created + \x27</td>\x27;
+      html += \x27<td style="padding:6px 4px;text-align:right;"><button class="secondary" style="padding:2px 8px;font-size:.75rem;" onclick="window._deleteUser(\x27 + "\x27" + u.id + "\x27" + \x27)">Delete</button></td>\x27;
+      html += \x27</tr>\x27;
     });
-    html += \\x27</table>\\x27;
+    html += \x27</table>\x27;
     userListEl.innerHTML = html;
   }
 
