@@ -11,226 +11,842 @@ HTML_PAGE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Zoom Translator</title>
+<title>SageRock AI</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:         #1a1e23;
+    --bg-card:    #20262d;
+    --bg-input:   #161b21;
+    --border:     #2e3740;
+    --border-warm:#3a3228;
+    --sage:       #6B8F71;
+    --sage-light: #7fa885;
+    --sage-dark:  #546e5a;
+    --stone:      #C4A882;
+    --stone-dark: #a8906c;
+    --cream:      #F5F0E8;
+    --cream-dim:  #c8c2b8;
+    --muted:      #7a8390;
+    --danger:     #c0645a;
+    --danger-dim: #a05550;
+    --success:    #6B8F71;
+    --shadow:     0 4px 24px rgba(0,0,0,.35);
+    --shadow-sm:  0 2px 8px rgba(0,0,0,.25);
+    --radius:     10px;
+    --radius-sm:  6px;
+  }
+
+  html { scroll-behavior: smooth; }
+
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #f5f5f5; color: #333; padding: 2rem;
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--cream);
+    min-height: 100vh;
+    line-height: 1.6;
   }
-  .container { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #1a1a2e; }
-  .card {
-    background: #fff; border-radius: 8px; padding: 1.5rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 1.5rem;
-  }
-  label { display: block; font-weight: 600; margin-bottom: .4rem; font-size: .9rem; }
-  input[type="text"], input[type="email"], input[type="password"], select {
-    width: 100%; padding: .6rem .8rem; border: 1px solid #ddd;
-    border-radius: 6px; font-size: .95rem; margin-bottom: 1rem;
-  }
-  input[type="text"]:focus, input[type="email"]:focus, input[type="password"]:focus, select:focus {
-    outline: none; border-color: #4361ee;
-  }
-  .checkboxes { margin-bottom: 1rem; }
-  .checkboxes label {
-    display: inline-flex; align-items: center; font-weight: 400;
-    margin-right: 1.5rem; cursor: pointer;
-  }
-  .checkboxes input { margin-right: .4rem; width: 16px; height: 16px; }
-  button.primary {
-    background: #4361ee; color: #fff; border: none; padding: .7rem 1.5rem;
-    border-radius: 6px; font-size: .95rem; cursor: pointer; font-weight: 600;
-  }
-  button.primary:hover { background: #3a56d4; }
-  button.primary:disabled { background: #aab; cursor: not-allowed; }
-  button.stop {
-    background: #e74c3c; color: #fff; border: none; padding: .35rem .8rem;
-    border-radius: 4px; font-size: .8rem; cursor: pointer;
-  }
-  button.stop:hover { background: #c0392b; }
-  button.copy-link {
-    background: #6c757d; color: #fff; border: none; padding: .35rem .8rem;
-    border-radius: 4px; font-size: .8rem; cursor: pointer; margin-right: .4rem;
-  }
-  button.copy-link:hover { background: #5a6268; }
-  button.copy-link.copied { background: #2ecc71; }
-  .listen-url {
-    font-size: .75rem; color: #4361ee; font-family: monospace;
-    word-break: break-all; margin-top: .3rem;
-  }
-  .dl-links { margin-top: .3rem; }
-  .dl-links a {
-    font-size: .75rem; color: #6c757d; margin-right: .8rem;
-    text-decoration: none;
-  }
-  .dl-links a:hover { color: #4361ee; text-decoration: underline; }
-  .status-dot {
-    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    margin-right: .4rem;
-  }
-  .status-dot.in_call { background: #2ecc71; }
-  .status-dot.starting { background: #f39c12; }
-  .status-dot.stopped { background: #95a5a6; }
-  .bot-row {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: .6rem 0; border-bottom: 1px solid #eee;
-  }
-  .bot-row:last-child { border-bottom: none; }
-  .bot-info { font-size: .9rem; }
-  .bot-id { color: #888; font-family: monospace; font-size: .8rem; }
-  .empty { color: #999; font-size: .9rem; padding: .5rem 0; }
-  #conn-status {
-    font-size: .75rem; padding: .25rem .6rem; border-radius: 12px;
-    display: inline-block; margin-bottom: 1rem;
-  }
-  #conn-status.connected { background: #d4edda; color: #155724; }
-  #conn-status.disconnected { background: #f8d7da; color: #721c24; }
-  .error-toast {
-    background: #f8d7da; color: #721c24; padding: .6rem 1rem;
-    border-radius: 6px; margin-bottom: .8rem; font-size: .85rem;
-  }
-  /* Login screen */
+
+  /* ── Login Screen ─────────────────────────────────────────────────── */
   #login-screen {
-    max-width: 380px; margin: 4rem auto;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background:
+      radial-gradient(ellipse 80% 60% at 30% 20%, rgba(107,143,113,.12) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 50% at 70% 80%, rgba(196,168,130,.08) 0%, transparent 60%),
+      var(--bg);
+    animation: fadeIn .6s ease both;
   }
-  #login-screen h1 { text-align: center; }
-  .auth-error {
-    background: #f8d7da; color: #721c24; padding: .5rem .8rem;
-    border-radius: 6px; margin-bottom: .8rem; font-size: .85rem;
-    display: none;
+
+  .login-card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-warm);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    box-shadow: var(--shadow), 0 0 0 1px rgba(196,168,130,.06);
   }
-  .auth-buttons { display: flex; gap: .8rem; }
-  .auth-buttons button { flex: 1; }
+
+  .brand {
+    text-align: center;
+    margin-bottom: 2rem;
+    letter-spacing: -.01em;
+  }
+
+  .brand-sage {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-style: italic;
+    font-size: 2.2rem;
+    color: var(--cream);
+  }
+
+  .brand-rock {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 2.2rem;
+    color: var(--cream);
+    letter-spacing: -.03em;
+  }
+
+  .brand-ai {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 2.2rem;
+    color: var(--sage);
+  }
+
+  .brand-tagline {
+    display: block;
+    font-size: .72rem;
+    font-weight: 500;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--stone);
+    margin-top: .3rem;
+  }
+
+  /* ── Brand inline (top bar) ─────────────────────────────────────── */
+  .brand-inline .brand-sage { font-size: 1.3rem; }
+  .brand-inline .brand-rock { font-size: 1.3rem; }
+  .brand-inline .brand-ai   { font-size: 1.3rem; }
+
+  /* ── Form Elements ─────────────────────────────────────────────── */
+  label {
+    display: block;
+    font-weight: 600;
+    font-size: .78rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: .45rem;
+  }
+
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  select {
+    width: 100%;
+    padding: .65rem .9rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: .92rem;
+    color: var(--cream);
+    margin-bottom: 1rem;
+    transition: border-color .2s, box-shadow .2s;
+  }
+
+  input[type="text"]:focus,
+  input[type="email"]:focus,
+  input[type="password"]:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--sage);
+    box-shadow: 0 0 0 3px rgba(107,143,113,.18);
+  }
+
+  select option { background: var(--bg-card); }
+
+  /* ── Buttons ─────────────────────────────────────────────────────── */
+  button.primary {
+    background: var(--sage);
+    color: #fff;
+    border: none;
+    padding: .72rem 1.6rem;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: .92rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .2s, transform .1s, box-shadow .2s;
+    box-shadow: 0 2px 8px rgba(107,143,113,.3);
+  }
+
+  button.primary:hover {
+    background: var(--sage-light);
+    box-shadow: 0 4px 16px rgba(107,143,113,.35);
+  }
+
+  button.primary:active { transform: translateY(1px); }
+
+  button.primary:disabled {
+    background: var(--border);
+    color: var(--muted);
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
   button.secondary {
-    background: #6c757d; color: #fff; border: none; padding: .7rem 1.5rem;
-    border-radius: 6px; font-size: .95rem; cursor: pointer; font-weight: 600;
+    background: transparent;
+    color: var(--stone);
+    border: 1px solid var(--stone-dark);
+    padding: .72rem 1.6rem;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: .92rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .2s, color .2s;
   }
-  button.secondary:hover { background: #5a6268; }
+
+  button.secondary:hover {
+    background: rgba(196,168,130,.1);
+    color: var(--cream);
+  }
+
+  button.stop {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid rgba(192,100,90,.4);
+    padding: .3rem .75rem;
+    border-radius: 20px;
+    font-family: inherit;
+    font-size: .75rem;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: .04em;
+    transition: background .2s, color .2s;
+  }
+
+  button.stop:hover {
+    background: rgba(192,100,90,.12);
+    color: #e87068;
+  }
+
+  button.copy-link {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: .3rem .75rem;
+    border-radius: 20px;
+    font-family: inherit;
+    font-size: .75rem;
+    font-weight: 500;
+    cursor: pointer;
+    margin-right: .4rem;
+    transition: background .2s, color .2s, border-color .2s;
+  }
+
+  button.copy-link:hover {
+    border-color: var(--sage-dark);
+    color: var(--sage-light);
+  }
+
+  button.copy-link.copied {
+    border-color: var(--sage);
+    color: var(--sage-light);
+    background: rgba(107,143,113,.1);
+  }
+
   button.logout {
-    background: none; border: 1px solid #ddd; color: #888; padding: .3rem .8rem;
-    border-radius: 4px; font-size: .8rem; cursor: pointer; float: right;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: .3rem .8rem;
+    border-radius: 20px;
+    font-family: inherit;
+    font-size: .75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color .2s, color .2s;
   }
-  button.logout:hover { background: #f5f5f5; color: #333; }
-  .user-bar {
-    display: flex; align-items: center; justify-content: space-between;
+
+  button.logout:hover {
+    border-color: var(--stone-dark);
+    color: var(--stone);
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────────── */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.6rem;
+    margin-bottom: 1.25rem;
+    box-shadow: var(--shadow-sm);
+    animation: slideUp .4s ease both;
+  }
+
+  .card-title {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-size: 1rem;
+    font-weight: 400;
+    color: var(--cream-dim);
+    letter-spacing: .01em;
+    margin-bottom: 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+
+  .card-title::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+    margin-left: .25rem;
+  }
+
+  /* ── Main layout ─────────────────────────────────────────────────── */
+  #main-app { display: none; }
+
+  .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(26,30,35,.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: .85rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+  }
+
+  .user-email {
+    font-size: .78rem;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .container {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  /* ── Connection status pill ──────────────────────────────────────── */
+  #conn-status {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    padding: .3rem .75rem;
+    border-radius: 20px;
+    margin-bottom: 1.25rem;
+    transition: background .3s, color .3s;
+  }
+
+  #conn-status::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  #conn-status.connected {
+    background: rgba(107,143,113,.15);
+    color: var(--sage-light);
+    border: 1px solid rgba(107,143,113,.3);
+  }
+
+  #conn-status.connected::before { background: var(--sage-light); box-shadow: 0 0 6px var(--sage); }
+
+  #conn-status.disconnected {
+    background: rgba(192,100,90,.1);
+    color: #c07070;
+    border: 1px solid rgba(192,100,90,.25);
+  }
+
+  #conn-status.disconnected::before { background: var(--danger); }
+
+  /* ── Mode segmented control ──────────────────────────────────────── */
+  .mode-toggle {
+    display: inline-flex;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+    margin-bottom: 1.2rem;
+    gap: 2px;
+  }
+
+  .mode-toggle input[type="radio"] { display: none; }
+
+  .mode-toggle label {
+    display: inline-block;
+    padding: .45rem 1.1rem;
+    border-radius: 6px;
+    font-size: .82rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    margin-bottom: 0;
+    transition: background .2s, color .2s;
+    white-space: nowrap;
+  }
+
+  .mode-toggle input[type="radio"]:checked + label {
+    background: var(--sage-dark);
+    color: var(--cream);
+    box-shadow: 0 1px 4px rgba(0,0,0,.3);
+  }
+
+  /* ── Checkboxes ──────────────────────────────────────────────────── */
+  .checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
     margin-bottom: 1rem;
   }
-  .user-email { font-size: .8rem; color: #888; }
-  #main-app { display: none; }
+
+  .checkboxes label {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-weight: 500;
+    font-size: .82rem;
+    letter-spacing: .02em;
+    text-transform: none;
+    color: var(--cream-dim);
+    cursor: pointer;
+    padding: .35rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    transition: border-color .2s, color .2s, background .2s;
+    margin-bottom: 0;
+  }
+
+  .checkboxes label:has(input:checked) {
+    border-color: var(--sage-dark);
+    color: var(--sage-light);
+    background: rgba(107,143,113,.1);
+  }
+
+  .checkboxes input[type="checkbox"],
+  .checkboxes input[type="radio"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    accent-color: var(--sage);
+    flex-shrink: 0;
+  }
+
+  /* ── Bot/recording rows ──────────────────────────────────────────── */
+  .bot-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .85rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bot-row:last-child { border-bottom: none; }
+
+  .bot-info { font-size: .88rem; flex: 1; min-width: 0; }
+
+  .bot-id {
+    color: var(--muted);
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: .75rem;
+  }
+
+  .empty {
+    color: var(--muted);
+    font-size: .88rem;
+    padding: .5rem 0;
+    font-style: italic;
+  }
+
+  /* ── Status dot ──────────────────────────────────────────────────── */
+  .status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: .4rem;
+    vertical-align: middle;
+  }
+
+  .status-dot.in_call  { background: var(--sage-light); box-shadow: 0 0 5px var(--sage); }
+  .status-dot.starting { background: var(--stone); box-shadow: 0 0 5px var(--stone-dark); }
+  .status-dot.stopped  { background: var(--border); }
+
+  /* ── Listen URL ──────────────────────────────────────────────────── */
+  .listen-url {
+    font-size: .72rem;
+    color: var(--sage);
+    font-family: "SF Mono", "Fira Code", monospace;
+    word-break: break-all;
+    margin-top: .3rem;
+    opacity: .8;
+  }
+
+  /* ── Download links ──────────────────────────────────────────────── */
+  .dl-links { margin-top: .4rem; display: flex; flex-wrap: wrap; gap: .1rem; }
+
+  .dl-links a {
+    font-size: .75rem;
+    color: var(--muted);
+    text-decoration: none;
+    padding: .2rem .55rem;
+    border-radius: 4px;
+    transition: color .2s, background .2s;
+    font-weight: 500;
+  }
+
+  .dl-links a:hover {
+    color: var(--stone);
+    background: rgba(196,168,130,.08);
+    text-decoration: none;
+  }
+
+  .dl-links a + a::before {
+    content: "·";
+    color: var(--border);
+    margin-right: .1rem;
+  }
+
+  /* ── Error toast ─────────────────────────────────────────────────── */
+  .error-toast {
+    background: rgba(192,100,90,.12);
+    border: 1px solid rgba(192,100,90,.3);
+    color: #e08080;
+    padding: .6rem 1rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: .8rem;
+    font-size: .85rem;
+    animation: slideUp .2s ease;
+  }
+
+  /* ── Auth error ──────────────────────────────────────────────────── */
+  .auth-error {
+    background: rgba(192,100,90,.12);
+    border: 1px solid rgba(192,100,90,.25);
+    color: #e08080;
+    padding: .5rem .85rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: .9rem;
+    font-size: .84rem;
+    display: none;
+  }
+
+  /* ── Auth buttons ────────────────────────────────────────────────── */
+  .auth-buttons { display: flex; gap: .8rem; margin-top: .25rem; }
+  .auth-buttons button { flex: 1; }
+
+  /* ── Forgot link ─────────────────────────────────────────────────── */
+  .forgot-wrap {
+    text-align: center;
+    margin-top: 1rem;
+  }
+
+  .forgot-wrap a {
+    font-size: .8rem;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color .2s;
+  }
+
+  .forgot-wrap a:hover { color: var(--stone); }
+
+  #reset-msg {
+    text-align: center;
+    font-size: .82rem;
+    color: var(--sage-light);
+    margin-top: .6rem;
+    display: none;
+  }
+
+  /* ── Admin section ───────────────────────────────────────────────── */
+  .admin-card-dashboard { border-color: rgba(107,143,113,.3); }
+  .admin-card-users     { border-color: rgba(196,168,130,.25); }
+  .admin-card-sessions  { border-color: rgba(192,100,90,.25); }
+
+  .admin-title-dashboard { color: var(--sage-light); }
+  .admin-title-users     { color: var(--stone); }
+  .admin-title-sessions  { color: #c07070; }
+
+  .admin-add-row {
+    display: flex;
+    gap: .6rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .admin-add-row input {
+    flex: 1;
+    min-width: 140px;
+    margin-bottom: 0;
+  }
+
+  /* ── Dashboard stats grid ────────────────────────────────────────── */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: .75rem;
+    margin: .5rem 0 1rem;
+  }
+
+  .stat-tile {
+    text-align: center;
+    padding: .9rem .6rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  .stat-value {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-size: 1.7rem;
+    line-height: 1;
+    margin-bottom: .25rem;
+  }
+
+  .stat-label {
+    font-size: .68rem;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .stat-sage    { color: var(--sage-light); }
+  .stat-stone   { color: var(--stone); }
+  .stat-cream   { color: var(--cream-dim); }
+  .stat-danger  { color: #c07070; }
+  .stat-purple  { color: #9b84c2; }
+
+  /* ── Dashboard service line ──────────────────────────────────────── */
+  .service-line {
+    font-size: .78rem;
+    color: var(--muted);
+    line-height: 1.7;
+    margin-top: .4rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem .6rem;
+  }
+
+  .service-line span { white-space: nowrap; }
+
+  /* ── Dashboard user table ────────────────────────────────────────── */
+  .dash-table {
+    width: 100%;
+    margin-top: 1rem;
+    font-size: .8rem;
+    border-collapse: collapse;
+  }
+
+  .dash-table th {
+    text-align: left;
+    padding: .4rem .5rem;
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dash-table th:not(:first-child) { text-align: right; }
+
+  .dash-table td {
+    padding: .45rem .5rem;
+    border-bottom: 1px solid rgba(46,55,64,.5);
+    color: var(--cream-dim);
+  }
+
+  .dash-table td:not(:first-child) { text-align: right; }
+
+  .dash-table tr:last-child td { border-bottom: none; }
+
+  /* ── User management table ───────────────────────────────────────── */
+  .user-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .85rem;
+  }
+
+  .user-table th {
+    text-align: left;
+    padding: .4rem .4rem;
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .user-table td {
+    padding: .55rem .4rem;
+    border-bottom: 1px solid rgba(46,55,64,.5);
+    color: var(--cream-dim);
+  }
+
+  .user-table tr:last-child td { border-bottom: none; }
+
+  /* ── Animations ──────────────────────────────────────────────────── */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .card:nth-child(1) { animation-delay: .05s; }
+  .card:nth-child(2) { animation-delay: .10s; }
+  .card:nth-child(3) { animation-delay: .15s; }
+  .card:nth-child(4) { animation-delay: .20s; }
+
+  /* ── Cost/revenue inline ─────────────────────────────────────────── */
+  .cost-green   { color: var(--sage-light); }
+  .cost-blue    { color: #6aacdb; }
+  .cost-purple  { color: #9b84c2; }
+  .owner-tag    { color: var(--danger); font-size: .72rem; }
+
+  /* ── Start button full-width ─────────────────────────────────────── */
+  #start-btn { width: 100%; margin-top: .25rem; }
 </style>
 </head>
 <body>
 
 <!-- Login Screen -->
 <div id="login-screen">
-  <div class="container">
-    <h1>Meeting Translator</h1>
-    <div class="card">
-      <div class="auth-error" id="auth-error"></div>
-      <label for="auth-email">Email</label>
-      <input type="email" id="auth-email" placeholder="you@example.com">
-      <label for="auth-password">Password</label>
-      <input type="password" id="auth-password" placeholder="Password">
-      <div class="auth-buttons">
-        <button class="primary" id="signin-btn">Sign In</button>
+  <div class="login-card">
+    <div class="brand">
+      <div>
+        <span class="brand-sage">Sage</span><span class="brand-rock">Rock</span><span class="brand-ai"> AI</span>
       </div>
-      <div style="text-align:center;margin-top:12px;">
-        <a href="#" id="forgot-link" style="color:#58a6ff;font-size:.85rem;">Forgot password?</a>
-      </div>
-      <div class="auth-error" id="reset-msg" style="color:#27ae60;"></div>
+      <span class="brand-tagline">Meeting Intelligence</span>
     </div>
+    <div class="auth-error" id="auth-error"></div>
+    <label for="auth-email">Email</label>
+    <input type="email" id="auth-email" placeholder="you@example.com">
+    <label for="auth-password">Password</label>
+    <input type="password" id="auth-password" placeholder="Password">
+    <div class="auth-buttons">
+      <button class="primary" id="signin-btn">Sign In</button>
+    </div>
+    <div class="forgot-wrap">
+      <a href="#" id="forgot-link">Forgot password?</a>
+    </div>
+    <div id="reset-msg"></div>
   </div>
 </div>
 
 <!-- Main App (hidden until authenticated) -->
 <div id="main-app">
-<div class="container">
-  <div class="user-bar">
-    <h1>Meeting Translator</h1>
-    <div>
+  <header class="app-header">
+    <div class="brand brand-inline">
+      <span class="brand-sage">Sage</span><span class="brand-rock">Rock</span><span class="brand-ai"> AI</span>
+    </div>
+    <div class="user-info">
       <span class="user-email" id="user-email"></span>
       <button class="logout" id="logout-btn">Log out</button>
     </div>
-  </div>
-  <div id="conn-status" class="disconnected">Disconnected</div>
-  <div id="errors"></div>
+  </header>
 
-  <div class="card">
-    <label>Mode</label>
-    <div class="checkboxes" style="margin-bottom:12px;">
-      <label><input type="radio" name="bot-mode" value="translate" checked> Translation</label>
-      <label><input type="radio" name="bot-mode" value="notes"> Meeting Notes</label>
+  <div class="container">
+    <div id="conn-status" class="disconnected">Disconnected</div>
+    <div id="errors"></div>
+
+    <div class="card">
+      <div class="card-title">Start a Session</div>
+
+      <div class="mode-toggle">
+        <input type="radio" name="bot-mode" id="mode-translate" value="translate" checked>
+        <label for="mode-translate">Translation</label>
+        <input type="radio" name="bot-mode" id="mode-notes" value="notes">
+        <label for="mode-notes">Meeting Notes</label>
+      </div>
+
+      <label for="meeting-url">Meeting Link</label>
+      <input type="text" id="meeting-url" placeholder="Zoom, Google Meet, or Teams link">
+
+      <div id="translate-options">
+        <label for="source-lang">Source Language</label>
+        <select id="source-lang">
+          <option value="en">English</option>
+          <option value="de">German</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="pt">Portuguese</option>
+        </select>
+
+        <label>Target Languages</label>
+        <div class="checkboxes">
+          <label><input type="checkbox" name="target" value="es"> Spanish</label>
+          <label><input type="checkbox" name="target" value="pt"> Portuguese</label>
+          <label><input type="checkbox" name="target" value="en"> English</label>
+          <label><input type="checkbox" name="target" value="de"> German</label>
+          <label><input type="checkbox" name="target" value="fr"> French</label>
+        </div>
+      </div>
+
+      <div id="notes-options" style="display:none;">
+        <label for="notes-lang">Meeting Language</label>
+        <select id="notes-lang">
+          <option value="en">English</option>
+          <option value="de">German</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="pt">Portuguese</option>
+        </select>
+      </div>
+
+      <button class="primary" id="start-btn" disabled>Start Translation</button>
     </div>
 
-    <label for="meeting-url">Meeting Link</label>
-    <input type="text" id="meeting-url" placeholder="Zoom, Google Meet, or Teams link">
+    <div class="card">
+      <div class="card-title">Active Bots</div>
+      <div id="bot-list"><div class="empty">No active bots</div></div>
+    </div>
 
-    <div id="translate-options">
-      <label for="source-lang">Source Language</label>
-      <select id="source-lang">
-        <option value="en">English</option>
-        <option value="de">German</option>
-        <option value="es">Spanish</option>
-        <option value="fr">French</option>
-        <option value="pt">Portuguese</option>
-      </select>
+    <div class="card">
+      <div class="card-title">Recordings</div>
+      <div id="rec-list"><div class="empty">No recordings yet</div></div>
+    </div>
 
-      <label>Target Languages</label>
-      <div class="checkboxes">
-        <label><input type="checkbox" name="target" value="es"> Spanish</label>
-        <label><input type="checkbox" name="target" value="pt"> Portuguese</label>
-        <label><input type="checkbox" name="target" value="en"> English</label>
-        <label><input type="checkbox" name="target" value="de"> German</label>
-        <label><input type="checkbox" name="target" value="fr"> French</label>
+    <div id="admin-section" style="display:none;">
+      <div class="card admin-card-dashboard">
+        <div class="card-title admin-title-dashboard">Dashboard</div>
+        <div id="admin-dashboard"><div class="empty">Loading...</div></div>
+      </div>
+      <div class="card admin-card-users">
+        <div class="card-title admin-title-users">User Management</div>
+        <div class="admin-add-row">
+          <input type="email" id="new-user-email" placeholder="Email">
+          <input type="password" id="new-user-pass" placeholder="Password (6+ chars)">
+          <button class="primary" id="add-user-btn">Add User</button>
+        </div>
+        <div id="user-list"><div class="empty">Loading...</div></div>
+      </div>
+      <div class="card admin-card-sessions">
+        <div class="card-title admin-title-sessions">All Sessions</div>
+        <div id="admin-rec-list"><div class="empty">Loading...</div></div>
       </div>
     </div>
-
-    <div id="notes-options" style="display:none;">
-      <label for="notes-lang">Meeting Language</label>
-      <select id="notes-lang">
-        <option value="en">English</option>
-        <option value="de">German</option>
-        <option value="es">Spanish</option>
-        <option value="fr">French</option>
-        <option value="pt">Portuguese</option>
-      </select>
-    </div>
-
-    <button class="primary" id="start-btn" disabled>Start Translation</button>
   </div>
-
-  <div class="card">
-    <label>Active Bots</label>
-    <div id="bot-list"><div class="empty">No active bots</div></div>
-  </div>
-
-  <div class="card">
-    <label>Recordings</label>
-    <div id="rec-list"><div class="empty">No recordings yet</div></div>
-  </div>
-
-  <div id="admin-section" style="display:none;">
-    <div class="card" style="border-left: 3px solid #8e44ad;">
-      <label style="color:#8e44ad;">Dashboard</label>
-      <div id="admin-dashboard"><div class="empty">Loading...</div></div>
-    </div>
-    <div class="card" style="border-left: 3px solid #27ae60;">
-      <label style="color:#27ae60;">User Management</label>
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-        <input type="email" id="new-user-email" placeholder="Email" style="flex:1;min-width:150px;">
-        <input type="password" id="new-user-pass" placeholder="Password (6+ chars)" style="flex:1;min-width:150px;">
-        <button class="primary" id="add-user-btn">Add User</button>
-      </div>
-      <div id="user-list"><div class="empty">Loading...</div></div>
-    </div>
-    <div class="card" style="border-left: 3px solid #e74c3c;">
-      <label style="color:#e74c3c;">Admin: All Sessions</label>
-      <div id="admin-rec-list"><div class="empty">Loading...</div></div>
-    </div>
-  </div>
-</div>
 </div>
 
 <script>
@@ -450,7 +1066,7 @@ HTML_PAGE = """\
     for (var i = 0; i < bots.length; i++) {
       var b = bots[i];
       var shortId = b.bot_id.substring(0, 8);
-      var ownerHtml = (isAdmin && b.user_id) ? ' <span style="color:#e74c3c;font-size:.75rem;">user:' + b.user_id.substring(0,8) + '</span>' : '';
+      var ownerHtml = (isAdmin && b.user_id) ? ' <span class="owner-tag">user:' + b.user_id.substring(0,8) + '</span>' : '';
       var isNotes = b.mode === "notes";
       var url = isNotes ? "" : listenUrl(b.target_lang);
       var dlHtml = "";
@@ -460,7 +1076,7 @@ HTML_PAGE = """\
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
           '<a href="#" data-video-bot="' + b.bot_id + '" onclick="downloadVideo(\\x27' + b.bot_id + '\\x27);return false;">Dubbed Video</a>' +
-          '(' + b.clip_count + ' clips)' +
+          '<span style="color:var(--muted);font-size:.72rem;">(' + b.clip_count + ' clips)</span>' +
         '</div>';
       }
       var modeLabel = isNotes ? '<strong>MEETING NOTES</strong>' :
@@ -470,11 +1086,11 @@ HTML_PAGE = """\
           '<span class="status-dot ' + b.status + '"></span>' +
           modeLabel + ' ' +
           '<span class="bot-id">' + shortId + '</span> ' + ownerHtml +
-          '<span>' + b.status + '</span>' +
+          '<span style="color:var(--muted);font-size:.8rem;"> ' + b.status + '</span>' +
           (url ? '<div class="listen-url">' + url + '</div>' : '') +
           dlHtml +
         '</div>' +
-        '<div>' +
+        '<div style="display:flex;align-items:center;gap:.4rem;flex-shrink:0;">' +
           (url ? '<button class="copy-link" data-url="' + url + '">Copy Link</button>' : '') +
           '<button class="stop" data-id="' + b.bot_id + '">Stop</button>' +
         '</div>' +
@@ -554,8 +1170,8 @@ HTML_PAGE = """\
         var costHtml = "";
         if (r.api_cost != null && r.duration) {
           var revenue = (r.duration / 60) * 0.50;
-          costHtml = ' &middot; <span style="color:#27ae60">cost $' + r.api_cost.toFixed(2) + '</span>' +
-            ' &middot; <span style="color:#2980b9">revenue $' + revenue.toFixed(2) + '</span>';
+          costHtml = ' &middot; <span class="cost-green">cost $' + r.api_cost.toFixed(2) + '</span>' +
+            ' &middot; <span class="cost-blue">revenue $' + revenue.toFixed(2) + '</span>';
         }
         var linksHtml;
         if (isNotes) {
@@ -574,7 +1190,7 @@ HTML_PAGE = """\
         html += '<div class="bot-row">' +
           '<div class="bot-info">' +
             '<strong>' + label + '</strong> ' +
-            '<span style="color:#888">' + info + costHtml + '</span>' +
+            '<span style="color:var(--muted)">' + info + costHtml + '</span>' +
             linksHtml +
           '</div>' +
         '</div>';
@@ -588,63 +1204,63 @@ HTML_PAGE = """\
   function loadDashboard() {
     if (!accessToken || !isAdmin) return;
     fetch("/api/admin/dashboard", {headers: authHeaders()}).then(function(r) { return r.json(); }).then(function(d) {
-      var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:8px 0;">';
-      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
-        '<div style="font-size:1.8rem;font-weight:bold;color:#2c3e50;">' + d.total_sessions + '</div>' +
-        '<div style="font-size:.75rem;color:#888;">Sessions</div></div>';
-      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
-        '<div style="font-size:1.8rem;font-weight:bold;color:#2c3e50;">' + d.total_minutes + '</div>' +
-        '<div style="font-size:.75rem;color:#888;">Minutes</div></div>';
-      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
-        '<div style="font-size:1.8rem;font-weight:bold;color:#e74c3c;">$' + d.total_api_cost.toFixed(2) + '</div>' +
-        '<div style="font-size:.75rem;color:#888;">API Cost</div></div>';
-      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
-        '<div style="font-size:1.8rem;font-weight:bold;color:#27ae60;">$' + d.total_revenue.toFixed(2) + '</div>' +
-        '<div style="font-size:.75rem;color:#888;">Revenue</div></div>';
-      html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
-        '<div style="font-size:1.8rem;font-weight:bold;color:#8e44ad;">$' + d.margin.toFixed(2) + '</div>' +
-        '<div style="font-size:.75rem;color:#888;">Margin</div></div>';
+      var html = '<div class="stat-grid">';
+      html += '<div class="stat-tile">' +
+        '<div class="stat-value stat-cream">' + d.total_sessions + '</div>' +
+        '<div class="stat-label">Sessions</div></div>';
+      html += '<div class="stat-tile">' +
+        '<div class="stat-value stat-cream">' + d.total_minutes + '</div>' +
+        '<div class="stat-label">Minutes</div></div>';
+      html += '<div class="stat-tile">' +
+        '<div class="stat-value stat-danger">$' + d.total_api_cost.toFixed(2) + '</div>' +
+        '<div class="stat-label">API Cost</div></div>';
+      html += '<div class="stat-tile">' +
+        '<div class="stat-value stat-sage">$' + d.total_revenue.toFixed(2) + '</div>' +
+        '<div class="stat-label">Revenue</div></div>';
+      html += '<div class="stat-tile">' +
+        '<div class="stat-value stat-purple">$' + d.margin.toFixed(2) + '</div>' +
+        '<div class="stat-label">Margin</div></div>';
       html += '</div>';
       // Service-level breakdown
       var services = [];
       if (d.recall_total_cost != null) {
-        services.push('<span style="color:#e67e22;">Recall: $' + d.recall_total_cost.toFixed(2) +
+        services.push('<span style="color:var(--stone);">Recall: $' + d.recall_total_cost.toFixed(2) +
           ' (' + d.recall_total_minutes + ' min, ' + d.recall_total_bots + ' bots)</span>');
       }
       if (d.deepgram_hours_this_month != null) {
-        services.push('<span style="color:#2980b9;">Deepgram this month: $' + d.deepgram_cost_this_month.toFixed(2) +
+        services.push('<span style="color:var(--cost-blue,#6aacdb);">Deepgram this month: $' + d.deepgram_cost_this_month.toFixed(2) +
           ' (' + d.deepgram_hours_this_month + ' hrs)</span>');
       }
       if (d.deepl_chars_used != null) {
         var pct = Math.round(d.deepl_chars_used / d.deepl_chars_limit * 100);
-        var color = pct > 80 ? '#e74c3c' : '#27ae60';
-        services.push('<span style="color:' + color + ';">DeepL: ' +
+        var pctColor = pct > 80 ? 'var(--danger)' : 'var(--sage-light)';
+        services.push('<span style="color:' + pctColor + ';">DeepL: ' +
           d.deepl_chars_used.toLocaleString() + ' / ' + d.deepl_chars_limit.toLocaleString() +
           ' chars (' + pct + '%)</span>');
       }
       if (services.length > 0) {
-        html += '<div style="margin-top:8px;font-size:.8rem;color:#888;">' + services.join(' &middot; ') + '</div>';
+        html += '<div class="service-line">' + services.join('') + '</div>';
       }
       // Per-user breakdown table
       if (d.users && d.users.length > 0) {
-        html += '<table style="width:100%;margin-top:12px;font-size:.8rem;border-collapse:collapse;">';
-        html += '<tr style="border-bottom:1px solid #ddd;color:#888;">' +
-          '<th style="text-align:left;padding:4px;">User</th>' +
-          '<th style="text-align:right;padding:4px;">Sessions</th>' +
-          '<th style="text-align:right;padding:4px;">Minutes</th>' +
-          '<th style="text-align:right;padding:4px;">API Cost</th>' +
-          '<th style="text-align:right;padding:4px;">Revenue</th>' +
-          '<th style="text-align:right;padding:4px;">Margin</th></tr>';
+        html += '<table class="dash-table">';
+        html += '<tr>' +
+          '<th>User</th>' +
+          '<th>Sessions</th>' +
+          '<th>Minutes</th>' +
+          '<th>API Cost</th>' +
+          '<th>Revenue</th>' +
+          '<th>Margin</th></tr>';
         for (var i = 0; i < d.users.length; i++) {
           var u = d.users[i];
           var label = u.email || (u.user_id ? u.user_id.substring(0, 8) : "?");
-          html += '<tr style="border-bottom:1px solid #f0f0f0;">' +
-            '<td style="padding:4px;">' + label + '</td>' +
-            '<td style="text-align:right;padding:4px;">' + u.sessions + '</td>' +
-            '<td style="text-align:right;padding:4px;">' + u.minutes + '</td>' +
-            '<td style="text-align:right;padding:4px;color:#e74c3c;">$' + u.api_cost.toFixed(2) + '</td>' +
-            '<td style="text-align:right;padding:4px;color:#27ae60;">$' + u.revenue.toFixed(2) + '</td>' +
-            '<td style="text-align:right;padding:4px;color:#8e44ad;">$' + u.margin.toFixed(2) + '</td></tr>';
+          html += '<tr>' +
+            '<td>' + label + '</td>' +
+            '<td>' + u.sessions + '</td>' +
+            '<td>' + u.minutes + '</td>' +
+            '<td class="stat-danger">$' + u.api_cost.toFixed(2) + '</td>' +
+            '<td class="stat-sage">$' + u.revenue.toFixed(2) + '</td>' +
+            '<td class="stat-purple">$' + u.margin.toFixed(2) + '</td></tr>';
         }
         html += '</table>';
       }
@@ -669,17 +1285,17 @@ HTML_PAGE = """\
         if (r.duration) info += " &middot; " + formatDuration(r.duration);
         if (r.api_cost != null && r.duration) {
           var rev = (r.duration / 60) * 0.50;
-          info += ' &middot; <span style="color:#27ae60">cost $' + r.api_cost.toFixed(2) + '</span>';
-          info += ' &middot; <span style="color:#2980b9">rev $' + rev.toFixed(2) + '</span>';
-          info += ' &middot; <span style="color:#8e44ad">margin $' + (rev - r.api_cost).toFixed(2) + '</span>';
+          info += ' &middot; <span class="cost-green">cost $' + r.api_cost.toFixed(2) + '</span>';
+          info += ' &middot; <span class="cost-blue">rev $' + rev.toFixed(2) + '</span>';
+          info += ' &middot; <span class="cost-purple">margin $' + (rev - r.api_cost).toFixed(2) + '</span>';
         }
         var dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString() : "";
         html += '<div class="bot-row">' +
           '<div class="bot-info">' +
             '<strong>' + langInfo + '</strong> ' +
             '<span class="bot-id">' + shortId + '</span> ' +
-            '<span style="color:#e74c3c;font-size:.75rem;">user:' + userId + '</span>' +
-            '<div style="color:#888;font-size:.8rem;">' + info + (dateStr ? " &middot; " + dateStr : "") + '</div>' +
+            '<span class="owner-tag">user:' + userId + '</span>' +
+            '<div style="color:var(--muted);font-size:.8rem;">' + info + (dateStr ? " &middot; " + dateStr : "") + '</div>' +
             '<div class="dl-links">' +
               '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
@@ -869,14 +1485,14 @@ HTML_PAGE = """\
       userListEl.innerHTML = \x27<div class="empty">No users</div>\x27;
       return;
     }
-    var html = \x27<table style="width:100%;border-collapse:collapse;font-size:.85rem;">\x27;
-    html += \x27<tr style="text-align:left;border-bottom:1px solid #444;"><th>Email</th><th>Created</th><th></th></tr>\x27;
+    var html = \x27<table class="user-table">\x27;
+    html += \x27<tr><th>Email</th><th>Created</th><th></th></tr>\x27;
     users.forEach(function(u) {
       var created = u.created_at ? new Date(u.created_at).toLocaleDateString() : "—";
-      html += \x27<tr style="border-bottom:1px solid #333;">\x27;
-      html += \x27<td style="padding:6px 4px;">\x27 + (u.email || "—") + \x27</td>\x27;
-      html += \x27<td style="padding:6px 4px;color:#888;">\x27 + created + \x27</td>\x27;
-      html += \x27<td style="padding:6px 4px;text-align:right;"><button class="secondary" style="padding:2px 8px;font-size:.75rem;" onclick="window._deleteUser(\x27 + "\x27" + u.id + "\x27" + \x27)">Delete</button></td>\x27;
+      html += \x27<tr>\x27;
+      html += \x27<td>\x27 + (u.email || "—") + \x27</td>\x27;
+      html += \x27<td style="color:var(--muted)">\x27 + created + \x27</td>\x27;
+      html += \x27<td style="text-align:right;"><button class="stop" style="border-radius:4px;" onclick="window._deleteUser(\x27 + "\x27" + u.id + "\x27" + \x27)">Delete</button></td>\x27;
       html += \x27</tr>\x27;
     });
     html += \x27</table>\x27;
@@ -921,53 +1537,254 @@ LISTEN_PAGE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Translation Listener</title>
+<title>SageRock AI — Live Translation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #1a1e23;
+    --bg-card:   #20262d;
+    --border:    #2e3740;
+    --sage:      #6B8F71;
+    --sage-light:#7fa885;
+    --stone:     #C4A882;
+    --cream:     #F5F0E8;
+    --cream-dim: #c8c2b8;
+    --muted:     #7a8390;
+    --danger:    #c0645a;
+    --shadow:    0 8px 40px rgba(0,0,0,.4);
+  }
+
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #f5f5f5; color: #333;
-    display: flex; align-items: center; justify-content: center;
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 0%, rgba(107,143,113,.1) 0%, transparent 60%),
+      var(--bg);
+    color: var(--cream);
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    animation: fadeIn .5s ease;
   }
-  .container { text-align: center; max-width: 400px; padding: 2rem; }
-  h1 { font-size: 1.4rem; margin-bottom: .5rem; color: #1a1a2e; }
-  .lang { font-size: 1.1rem; color: #4361ee; margin-bottom: 1.5rem; }
-  .status-badge {
-    display: inline-block; padding: .35rem 1rem; border-radius: 20px;
-    font-size: .85rem; font-weight: 600; margin-bottom: 1.5rem;
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
-  .status-badge.connected { background: #d4edda; color: #155724; }
-  .status-badge.disconnected { background: #f8d7da; color: #721c24; }
-  .status-badge.connecting { background: #fff3cd; color: #856404; }
-  .activity {
-    font-size: .95rem; color: #666; min-height: 1.5rem;
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: .4; }
   }
-  .activity.playing { color: #2ecc71; font-weight: 600; }
-  .subtitle {
-    font-size: 1.15rem; font-weight: 600; color: #1a1a2e;
-    margin-bottom: .4rem; min-height: 1.5rem;
+
+  @keyframes waveIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
-  .original {
-    font-size: .85rem; color: #888; font-style: italic;
-    margin-bottom: 1.2rem; min-height: 1.2rem;
+
+  /* ── Brand ─────────────────────────────────────────────────────── */
+  .brand {
+    text-align: center;
+    margin-bottom: 2.5rem;
   }
-  .clip-count {
-    font-size: .8rem; color: #999; margin-top: 1rem;
+
+  .brand-sage {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-style: italic;
+    font-size: 1.7rem;
+    color: var(--cream);
   }
+
+  .brand-rock {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 1.7rem;
+    color: var(--cream);
+    letter-spacing: -.03em;
+  }
+
+  .brand-ai {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 1.7rem;
+    color: var(--sage);
+  }
+
+  .brand-tagline {
+    display: block;
+    font-size: .65rem;
+    font-weight: 500;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--stone);
+    margin-top: .2rem;
+  }
+
+  /* ── Card ───────────────────────────────────────────────────────── */
+  .card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    box-shadow: var(--shadow);
+    text-align: center;
+  }
+
+  /* ── Language label ─────────────────────────────────────────────── */
+  .lang-label {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-size: 1.4rem;
+    color: var(--stone);
+    margin-bottom: 1.8rem;
+    letter-spacing: .01em;
+  }
+
+  /* ── Start button ───────────────────────────────────────────────── */
   .start-btn {
-    background: #4361ee; color: #fff; border: none; padding: .8rem 2rem;
-    border-radius: 8px; font-size: 1.1rem; cursor: pointer; font-weight: 600;
+    background: var(--sage);
+    color: #fff;
+    border: none;
+    padding: .85rem 2.5rem;
+    border-radius: 50px;
+    font-family: "Plus Jakarta Sans", inherit;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: .03em;
+    transition: background .2s, box-shadow .2s, transform .1s;
+    box-shadow: 0 4px 20px rgba(107,143,113,.35);
     margin-bottom: 1.5rem;
   }
-  .start-btn:hover { background: #3a56d4; }
+
+  .start-btn:hover {
+    background: var(--sage-light);
+    box-shadow: 0 6px 28px rgba(107,143,113,.45);
+  }
+
+  .start-btn:active { transform: scale(.97); }
+
+  /* ── Status badge ───────────────────────────────────────────────── */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .35rem 1rem;
+    border-radius: 20px;
+    font-size: .75rem;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    margin-bottom: 1.8rem;
+    transition: background .3s, color .3s;
+  }
+
+  .status-badge::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-badge.connected {
+    background: rgba(107,143,113,.15);
+    color: var(--sage-light);
+    border: 1px solid rgba(107,143,113,.3);
+  }
+
+  .status-badge.connected::before {
+    background: var(--sage-light);
+    box-shadow: 0 0 6px var(--sage);
+    animation: pulse 2s infinite;
+  }
+
+  .status-badge.disconnected {
+    background: rgba(192,100,90,.1);
+    color: #c07070;
+    border: 1px solid rgba(192,100,90,.25);
+  }
+
+  .status-badge.disconnected::before { background: var(--danger); }
+
+  .status-badge.connecting {
+    background: rgba(196,168,130,.1);
+    color: var(--stone);
+    border: 1px solid rgba(196,168,130,.25);
+  }
+
+  .status-badge.connecting::before {
+    background: var(--stone);
+    animation: pulse 1s infinite;
+  }
+
+  /* ── Transcript area ─────────────────────────────────────────────── */
+  .subtitle {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-size: 1.25rem;
+    font-weight: 400;
+    color: var(--cream);
+    margin-bottom: .4rem;
+    min-height: 1.8rem;
+    line-height: 1.4;
+    animation: waveIn .3s ease;
+  }
+
+  .original {
+    font-size: .83rem;
+    color: var(--muted);
+    font-style: italic;
+    margin-bottom: 1.4rem;
+    min-height: 1.2rem;
+  }
+
+  /* ── Activity indicator ─────────────────────────────────────────── */
+  .activity {
+    font-size: .82rem;
+    color: var(--muted);
+    min-height: 1.4rem;
+    font-weight: 500;
+    letter-spacing: .02em;
+  }
+
+  .activity.playing {
+    color: var(--sage-light);
+  }
+
+  .activity.playing::before {
+    content: "▶ ";
+    font-size: .7rem;
+  }
+
+  /* ── Clip count ─────────────────────────────────────────────────── */
+  .clip-count {
+    font-size: .72rem;
+    color: var(--muted);
+    margin-top: 1.2rem;
+    opacity: .7;
+  }
+
   .hidden { display: none; }
 </style>
 </head>
 <body>
-<div class="container">
-  <h1>Translation Listener</h1>
-  <div class="lang" id="lang-label"></div>
+
+<div class="brand">
+  <div>
+    <span class="brand-sage">Sage</span><span class="brand-rock">Rock</span><span class="brand-ai"> AI</span>
+  </div>
+  <span class="brand-tagline">Live Translation</span>
+</div>
+
+<div class="card">
+  <div class="lang-label" id="lang-label"></div>
   <button class="start-btn" id="start-btn">Start Listening</button>
   <div class="hidden" id="live-area">
     <div class="status-badge connecting" id="status">Connecting...</div>
@@ -1097,100 +1914,497 @@ MEETING_PAGE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Meeting Notes</title>
+<title>SageRock AI — Meeting Notes</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; }
-  .container { max-width: 900px; margin: 0 auto; padding: 20px; }
-  h1 { font-size: 1.4rem; margin-bottom: 4px; }
-  .meta { color: #888; font-size: .85rem; margin-bottom: 20px; }
-  .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-  .section h2 { font-size: 1.1rem; margin-bottom: 12px; color: #58a6ff; }
-  .summary-content { line-height: 1.6; }
-  .summary-content h1, .summary-content h2, .summary-content h3 { color: #e6edf3; margin-top: 16px; margin-bottom: 8px; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #1a1e23;
+    --bg-card:   #20262d;
+    --bg-input:  #161b21;
+    --border:    #2e3740;
+    --sage:      #6B8F71;
+    --sage-light:#7fa885;
+    --sage-dark: #546e5a;
+    --stone:     #C4A882;
+    --stone-dark:#a8906c;
+    --cream:     #F5F0E8;
+    --cream-dim: #c8c2b8;
+    --muted:     #7a8390;
+    --danger:    #c0645a;
+    --shadow:    0 4px 24px rgba(0,0,0,.35);
+    --shadow-sm: 0 2px 8px rgba(0,0,0,.2);
+    --radius:    10px;
+    --radius-sm: 6px;
+  }
+
+  body {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--cream);
+    min-height: 100vh;
+    line-height: 1.6;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── App header ──────────────────────────────────────────────────── */
+  .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(26,30,35,.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: .85rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .brand-sage {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-style: italic;
+    font-size: 1.3rem;
+    color: var(--cream);
+  }
+
+  .brand-rock {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 1.3rem;
+    color: var(--cream);
+    letter-spacing: -.03em;
+  }
+
+  .brand-ai {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 1.3rem;
+    color: var(--sage);
+  }
+
+  .back-link {
+    font-size: .82rem;
+    color: var(--muted);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color .2s;
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+  }
+
+  .back-link:hover { color: var(--stone); text-decoration: none; }
+
+  /* ── Container ───────────────────────────────────────────────────── */
+  .container {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  /* ── Page title ──────────────────────────────────────────────────── */
+  .page-title {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-size: 1.7rem;
+    font-weight: 400;
+    color: var(--cream);
+    margin-bottom: .3rem;
+    animation: slideUp .4s ease;
+  }
+
+  .meta {
+    font-size: .8rem;
+    color: var(--muted);
+    margin-bottom: 1.75rem;
+    font-weight: 500;
+    animation: slideUp .4s ease .05s both;
+  }
+
+  /* ── Section cards ───────────────────────────────────────────────── */
+  .section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.6rem;
+    margin-bottom: 1.25rem;
+    box-shadow: var(--shadow-sm);
+    animation: slideUp .4s ease both;
+  }
+
+  .section:nth-child(1) { animation-delay: .08s; }
+  .section:nth-child(2) { animation-delay: .14s; }
+  .section:nth-child(3) { animation-delay: .20s; }
+
+  .section h2 {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-size: 1rem;
+    font-weight: 400;
+    color: var(--stone);
+    margin-bottom: 1rem;
+    letter-spacing: .01em;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+
+  .section h2::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── Summary content (markdown) ──────────────────────────────────── */
+  .summary-content { line-height: 1.7; color: var(--cream-dim); }
+  .summary-content h1, .summary-content h2, .summary-content h3 {
+    font-family: "DM Serif Display", Georgia, serif;
+    font-weight: 400;
+    color: var(--cream);
+    margin-top: 1.2rem;
+    margin-bottom: .5rem;
+  }
   .summary-content h1 { font-size: 1.2rem; }
   .summary-content h2 { font-size: 1.05rem; }
-  .summary-content h3 { font-size: .95rem; }
-  .summary-content ul, .summary-content ol { padding-left: 20px; margin: 8px 0; }
-  .summary-content li { margin-bottom: 4px; }
-  .summary-content strong { color: #f0f6fc; }
-  .summary-content p { margin-bottom: 8px; }
-  .search-box { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: .9rem; margin-bottom: 12px; }
-  .search-box:focus { outline: none; border-color: #58a6ff; }
-  .transcript { max-height: 500px; overflow-y: auto; }
-  .utterance { padding: 6px 0; border-bottom: 1px solid #21262d; font-size: .85rem; line-height: 1.5; }
-  .utterance .time { color: #888; font-family: monospace; margin-right: 8px; }
-  .utterance .speaker { color: #58a6ff; font-weight: 600; margin-right: 6px; }
-  .chat-box { display: flex; gap: 8px; }
-  .chat-input { flex: 1; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: .9rem; }
-  .chat-input:focus { outline: none; border-color: #58a6ff; }
-  .chat-send { padding: 10px 20px; background: #238636; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: .9rem; }
-  .chat-send:hover { background: #2ea043; }
-  .chat-send:disabled { opacity: .5; cursor: default; }
-  .chat-messages { margin-bottom: 12px; max-height: 300px; overflow-y: auto; }
-  .chat-msg { padding: 8px 12px; margin-bottom: 8px; border-radius: 6px; font-size: .85rem; line-height: 1.5; }
-  .chat-msg.user { background: #1f3a5f; text-align: right; }
-  .chat-msg.assistant { background: #1c2333; }
-  .chat-msg.assistant p { margin-bottom: 6px; }
-  .chat-msg.assistant ul, .chat-msg.assistant ol { padding-left: 20px; margin: 6px 0; }
-  .loading { color: #888; font-style: italic; }
-  #login-screen { max-width: 360px; margin: 80px auto; }
-  #login-screen h1 { text-align: center; margin-bottom: 16px; }
-  .auth-field { margin-bottom: 12px; }
-  .auth-field label { display: block; margin-bottom: 4px; color: #888; font-size: .85rem; }
-  .auth-field input { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; }
-  .auth-btn { width: 100%; padding: 10px; background: #238636; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: .9rem; }
-  .auth-error { color: #f85149; font-size: .85rem; margin-top: 8px; display: none; }
-  a { color: #58a6ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  .summary-content h3 { font-size: .95rem; color: var(--stone); }
+  .summary-content ul, .summary-content ol { padding-left: 1.4rem; margin: .6rem 0; }
+  .summary-content li { margin-bottom: .3rem; }
+  .summary-content strong { color: var(--cream); font-weight: 600; }
+  .summary-content p { margin-bottom: .7rem; }
+
+  /* ── Search box ──────────────────────────────────────────────────── */
+  .search-box {
+    width: 100%;
+    padding: .6rem .9rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    color: var(--cream);
+    font-size: .88rem;
+    margin-bottom: .9rem;
+    transition: border-color .2s, box-shadow .2s;
+  }
+
+  .search-box:focus {
+    outline: none;
+    border-color: var(--sage);
+    box-shadow: 0 0 0 3px rgba(107,143,113,.15);
+  }
+
+  .search-box::placeholder { color: var(--muted); }
+
+  /* ── Transcript ───────────────────────────────────────────────────── */
+  .transcript {
+    max-height: 480px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .transcript::-webkit-scrollbar { width: 4px; }
+  .transcript::-webkit-scrollbar-track { background: transparent; }
+  .transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .utterance {
+    padding: .6rem 0;
+    border-bottom: 1px solid rgba(46,55,64,.6);
+    font-size: .84rem;
+    line-height: 1.55;
+    display: flex;
+    gap: .5rem;
+  }
+
+  .utterance:last-child { border-bottom: none; }
+
+  .utterance .time {
+    color: var(--muted);
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: .72rem;
+    flex-shrink: 0;
+    padding-top: .1rem;
+    opacity: .7;
+  }
+
+  .utterance .speaker {
+    color: var(--sage-light);
+    font-weight: 600;
+    font-size: .8rem;
+    flex-shrink: 0;
+    padding-top: .05rem;
+  }
+
+  .utterance .text { color: var(--cream-dim); }
+
+  /* ── Chat ────────────────────────────────────────────────────────── */
+  .chat-messages {
+    margin-bottom: 1rem;
+    max-height: 320px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .chat-messages::-webkit-scrollbar { width: 4px; }
+  .chat-messages::-webkit-scrollbar-track { background: transparent; }
+  .chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .chat-msg {
+    padding: .7rem 1rem;
+    margin-bottom: .6rem;
+    border-radius: var(--radius-sm);
+    font-size: .85rem;
+    line-height: 1.55;
+    animation: slideUp .2s ease;
+  }
+
+  .chat-msg.user {
+    background: rgba(107,143,113,.12);
+    border: 1px solid rgba(107,143,113,.2);
+    text-align: right;
+    color: var(--cream-dim);
+  }
+
+  .chat-msg.assistant {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--cream-dim);
+  }
+
+  .chat-msg.assistant p { margin-bottom: .5rem; }
+  .chat-msg.assistant ul,
+  .chat-msg.assistant ol { padding-left: 1.4rem; margin: .4rem 0; }
+
+  .chat-box {
+    display: flex;
+    gap: .6rem;
+  }
+
+  .chat-input {
+    flex: 1;
+    padding: .65rem .9rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    color: var(--cream);
+    font-size: .88rem;
+    transition: border-color .2s, box-shadow .2s;
+  }
+
+  .chat-input:focus {
+    outline: none;
+    border-color: var(--sage);
+    box-shadow: 0 0 0 3px rgba(107,143,113,.15);
+  }
+
+  .chat-input::placeholder { color: var(--muted); }
+
+  .chat-send {
+    padding: .65rem 1.3rem;
+    background: var(--sage-dark);
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    color: #fff;
+    font-size: .88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .2s, box-shadow .2s;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(107,143,113,.25);
+  }
+
+  .chat-send:hover { background: var(--sage); box-shadow: 0 4px 14px rgba(107,143,113,.35); }
+  .chat-send:disabled { opacity: .45; cursor: default; box-shadow: none; }
+
+  /* ── Loading ─────────────────────────────────────────────────────── */
+  .loading {
+    color: var(--muted);
+    font-style: italic;
+    font-size: .88rem;
+  }
+
+  /* ── Auth / login screen ─────────────────────────────────────────── */
+  #login-screen {
+    min-height: 100vh;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background:
+      radial-gradient(ellipse 80% 60% at 30% 20%, rgba(107,143,113,.1) 0%, transparent 60%),
+      var(--bg);
+  }
+
+  #login-screen.visible {
+    display: flex;
+    animation: fadeIn .4s ease;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--bg-card);
+    border: 1px solid rgba(196,168,130,.2);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    box-shadow: var(--shadow);
+  }
+
+  .login-brand {
+    text-align: center;
+    margin-bottom: 1.75rem;
+  }
+
+  .login-brand .brand-sage { font-size: 2rem; }
+  .login-brand .brand-rock { font-size: 2rem; }
+  .login-brand .brand-ai   { font-size: 2rem; }
+
+  .login-brand .brand-tagline {
+    display: block;
+    font-size: .65rem;
+    font-weight: 500;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--stone);
+    margin-top: .25rem;
+  }
+
+  .auth-field { margin-bottom: .9rem; }
+
+  .auth-field label {
+    display: block;
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: .4rem;
+  }
+
+  .auth-field input {
+    width: 100%;
+    padding: .65rem .9rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    color: var(--cream);
+    font-size: .92rem;
+    transition: border-color .2s, box-shadow .2s;
+  }
+
+  .auth-field input:focus {
+    outline: none;
+    border-color: var(--sage);
+    box-shadow: 0 0 0 3px rgba(107,143,113,.15);
+  }
+
+  .auth-btn {
+    width: 100%;
+    padding: .75rem;
+    background: var(--sage);
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    color: #fff;
+    font-size: .95rem;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: .5rem;
+    transition: background .2s, box-shadow .2s;
+    box-shadow: 0 2px 8px rgba(107,143,113,.3);
+  }
+
+  .auth-btn:hover { background: var(--sage-light); }
+
+  .auth-error {
+    color: #e08080;
+    font-size: .82rem;
+    margin-top: .7rem;
+    display: none;
+    padding: .45rem .8rem;
+    background: rgba(192,100,90,.1);
+    border: 1px solid rgba(192,100,90,.25);
+    border-radius: var(--radius-sm);
+  }
+
+  /* ── Links ───────────────────────────────────────────────────────── */
+  a { color: var(--sage-light); text-decoration: none; }
+  a:hover { color: var(--stone); text-decoration: underline; }
 </style>
 </head>
 <body>
 
-<div id="login-screen" style="display:none;">
-  <h1>Sign In</h1>
-  <div class="auth-field">
-    <label>Email</label>
-    <input type="email" id="auth-email" placeholder="Email">
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-brand">
+      <div>
+        <span class="brand-sage">Sage</span><span class="brand-rock">Rock</span><span class="brand-ai"> AI</span>
+      </div>
+      <span class="brand-tagline">Meeting Intelligence</span>
+    </div>
+    <div class="auth-field">
+      <label>Email</label>
+      <input type="email" id="auth-email" placeholder="you@example.com">
+    </div>
+    <div class="auth-field">
+      <label>Password</label>
+      <input type="password" id="auth-password" placeholder="Password">
+    </div>
+    <button class="auth-btn" id="signin-btn">Sign In</button>
+    <div class="auth-error" id="auth-error"></div>
   </div>
-  <div class="auth-field">
-    <label>Password</label>
-    <input type="password" id="auth-password" placeholder="Password">
-  </div>
-  <button class="auth-btn" id="signin-btn">Sign In</button>
-  <div class="auth-error" id="auth-error"></div>
 </div>
 
 <div id="main-app" style="display:none;">
-<div class="container">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-    <h1>Meeting Notes</h1>
-    <a href="/">&larr; Back to Dashboard</a>
-  </div>
-  <div class="meta" id="meeting-meta"></div>
+  <header class="app-header">
+    <div>
+      <span class="brand-sage">Sage</span><span class="brand-rock">Rock</span><span class="brand-ai"> AI</span>
+    </div>
+    <a href="/" class="back-link">&larr; Dashboard</a>
+  </header>
 
-  <div class="section" id="summary-section">
-    <h2>Summary</h2>
-    <div class="summary-content" id="summary-content"><span class="loading">Loading...</span></div>
-  </div>
+  <div class="container">
+    <div class="page-title">Meeting Notes</div>
+    <div class="meta" id="meeting-meta"></div>
 
-  <div class="section">
-    <h2>Transcript</h2>
-    <input type="text" class="search-box" id="transcript-search" placeholder="Search transcript...">
-    <div class="transcript" id="transcript-content"><span class="loading">Loading...</span></div>
-  </div>
+    <div class="section" id="summary-section">
+      <h2>Summary</h2>
+      <div class="summary-content" id="summary-content"><span class="loading">Loading...</span></div>
+    </div>
 
-  <div class="section">
-    <h2>Ask a Question</h2>
-    <div class="chat-messages" id="chat-messages"></div>
-    <div class="chat-box">
-      <input type="text" class="chat-input" id="chat-input" placeholder="Ask about this meeting...">
-      <button class="chat-send" id="chat-send" disabled>Ask</button>
+    <div class="section">
+      <h2>Transcript</h2>
+      <input type="text" class="search-box" id="transcript-search" placeholder="Search transcript...">
+      <div class="transcript" id="transcript-content"><span class="loading">Loading...</span></div>
+    </div>
+
+    <div class="section">
+      <h2>Ask a Question</h2>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-box">
+        <input type="text" class="chat-input" id="chat-input" placeholder="Ask about this meeting...">
+        <button class="chat-send" id="chat-send" disabled>Ask</button>
+      </div>
     </div>
   </div>
-</div>
 </div>
 
 <script>
@@ -1223,10 +2437,12 @@ MEETING_PAGE = """\
 
   function showLogin() {
     loginScreen.style.display = "";
+    loginScreen.classList.add("visible");
     mainApp.style.display = "none";
   }
   function showApp() {
     loginScreen.style.display = "none";
+    loginScreen.classList.remove("visible");
     mainApp.style.display = "block";
     loadMeeting();
     connectWs();
@@ -1283,7 +2499,7 @@ MEETING_PAGE = """\
       .then(function(data) {
         var date = data.created_at ? new Date(data.created_at).toLocaleString() : "";
         var dur = data.duration ? Math.round(data.duration / 60) + " min" : "";
-        meetingMeta.textContent = [date, dur].filter(Boolean).join(" \\xb7 ");
+        meetingMeta.textContent = [date, dur].filter(Boolean).join(" \xb7 ");
 
         if (data.summary) {
           if (typeof marked !== "undefined") {
@@ -1319,8 +2535,8 @@ MEETING_PAGE = """\
       var text = t.text || t.original || "";
       html += '<div class="utterance">' +
         '<span class="time">' + ts + '</span>' +
-        '<span class="speaker">' + speaker + ':</span>' +
-        '<span>' + text + '</span>' +
+        '<span class="speaker">' + speaker + '</span>' +
+        '<span class="text">' + text + '</span>' +
       '</div>';
     }
     transcriptContent.innerHTML = html;
