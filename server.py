@@ -798,6 +798,12 @@ async def mgmt_handler(ws: ServerConnection, user: dict) -> None:
                 await _handle_start(ws, msg, user_id)
             elif action == "stop":
                 await _handle_stop(ws, msg, user_id, admin)
+            elif action == "list_users":
+                await _handle_list_users(ws, admin)
+            elif action == "create_user":
+                await _handle_create_user(ws, msg, admin)
+            elif action == "delete_user":
+                await _handle_delete_user(ws, msg, user_id, admin)
             else:
                 await ws.send(json.dumps({"type": "error", "message": f"Unknown action: {action}"}))
 
@@ -911,6 +917,57 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
 
     # Remove from active sessions after broadcasting the stopped status
     bot_sessions.pop(bot_id, None)
+
+
+async def _handle_list_users(ws: ServerConnection, admin: bool) -> None:
+    if not admin:
+        await ws.send(json.dumps({"type": "error", "message": "Admin only"}))
+        return
+    try:
+        users = await supabase_client.admin_list_users()
+        await ws.send(json.dumps({"type": "users", "users": users}))
+    except Exception as e:
+        log.exception("Failed to list users")
+        await ws.send(json.dumps({"type": "error", "message": f"Failed to list users: {e}"}))
+
+
+async def _handle_create_user(ws: ServerConnection, msg: dict, admin: bool) -> None:
+    if not admin:
+        await ws.send(json.dumps({"type": "error", "message": "Admin only"}))
+        return
+    email = (msg.get("email") or "").strip()
+    password = msg.get("password") or ""
+    if not email or not password:
+        await ws.send(json.dumps({"type": "error", "message": "Email and password required"}))
+        return
+    if len(password) < 6:
+        await ws.send(json.dumps({"type": "error", "message": "Password must be at least 6 characters"}))
+        return
+    try:
+        user = await supabase_client.admin_create_user(email, password)
+        await ws.send(json.dumps({"type": "user_created", "user": user}))
+    except Exception as e:
+        log.exception("Failed to create user")
+        await ws.send(json.dumps({"type": "error", "message": f"Failed to create user: {e}"}))
+
+
+async def _handle_delete_user(ws: ServerConnection, msg: dict, user_id: str, admin: bool) -> None:
+    if not admin:
+        await ws.send(json.dumps({"type": "error", "message": "Admin only"}))
+        return
+    target_id = (msg.get("user_id") or "").strip()
+    if not target_id:
+        await ws.send(json.dumps({"type": "error", "message": "Missing user_id"}))
+        return
+    if target_id == user_id:
+        await ws.send(json.dumps({"type": "error", "message": "Cannot delete yourself"}))
+        return
+    try:
+        await supabase_client.admin_delete_user(target_id)
+        await ws.send(json.dumps({"type": "user_deleted", "user_id": target_id}))
+    except Exception as e:
+        log.exception("Failed to delete user %s", target_id)
+        await ws.send(json.dumps({"type": "error", "message": f"Failed to delete user: {e}"}))
 
 
 # ── Listener WebSocket handler (/listen) ──────────────────────────────

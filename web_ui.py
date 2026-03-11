@@ -135,7 +135,6 @@ HTML_PAGE = """\
       <input type="password" id="auth-password" placeholder="Password">
       <div class="auth-buttons">
         <button class="primary" id="signin-btn">Sign In</button>
-        <button class="secondary" id="signup-btn">Sign Up</button>
       </div>
     </div>
   </div>
@@ -194,6 +193,15 @@ HTML_PAGE = """\
       <label style="color:#8e44ad;">Dashboard</label>
       <div id="admin-dashboard"><div class="empty">Loading...</div></div>
     </div>
+    <div class="card" style="border-left: 3px solid #27ae60;">
+      <label style="color:#27ae60;">User Management</label>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+        <input type="email" id="new-user-email" placeholder="Email" style="flex:1;min-width:150px;">
+        <input type="password" id="new-user-pass" placeholder="Password (6+ chars)" style="flex:1;min-width:150px;">
+        <button class="primary" id="add-user-btn">Add User</button>
+      </div>
+      <div id="user-list"><div class="empty">Loading...</div></div>
+    </div>
     <div class="card" style="border-left: 3px solid #e74c3c;">
       <label style="color:#e74c3c;">Admin: All Sessions</label>
       <div id="admin-rec-list"><div class="empty">Loading...</div></div>
@@ -221,7 +229,6 @@ HTML_PAGE = """\
   var authEmail   = document.getElementById("auth-email");
   var authPass    = document.getElementById("auth-password");
   var signinBtn   = document.getElementById("signin-btn");
-  var signupBtn   = document.getElementById("signup-btn");
   var logoutBtn   = document.getElementById("logout-btn");
   var userEmailEl = document.getElementById("user-email");
 
@@ -271,19 +278,6 @@ HTML_PAGE = """\
     if (!email || !pass) { showAuthError("Enter email and password"); return; }
     sb.auth.signInWithPassword({email: email, password: pass}).then(function(res) {
       if (res.error) { showAuthError(res.error.message); }
-      // showApp will be called by onAuthStateChange
-    });
-  });
-
-  signupBtn.addEventListener("click", function() {
-    var email = authEmail.value.trim();
-    var pass  = authPass.value;
-    if (!email || !pass) { showAuthError("Enter email and password"); return; }
-    sb.auth.signUp({email: email, password: pass}).then(function(res) {
-      if (res.error) { showAuthError(res.error.message); return; }
-      if (!res.data.session) {
-        showAuthError("Check your email to confirm your account.");
-      }
       // showApp will be called by onAuthStateChange
     });
   });
@@ -349,9 +343,16 @@ HTML_PAGE = """\
             adminSection.style.display = "";
             loadDashboard();
             loadAdminSessions();
+            loadUsers();
           }
         }
         renderBots(msg.bots);
+      } else if (msg.type === "users") {
+        renderUsers(msg.users);
+      } else if (msg.type === "user_created") {
+        loadUsers();
+      } else if (msg.type === "user_deleted") {
+        loadUsers();
       } else if (msg.type === "error") {
         showError(msg.message);
       }
@@ -762,6 +763,55 @@ HTML_PAGE = """\
     }
     poll();
   };
+
+  // ── User Management (admin) ──────────────────────────────────────────
+  var userListEl = document.getElementById("user-list");
+  var addUserBtn = document.getElementById("add-user-btn");
+  var newUserEmail = document.getElementById("new-user-email");
+  var newUserPass = document.getElementById("new-user-pass");
+
+  function loadUsers() {
+    if (!ws || ws.readyState !== 1 || !isAdmin) return;
+    ws.send(JSON.stringify({action: "list_users"}));
+  }
+
+  function renderUsers(users) {
+    if (!users || users.length === 0) {
+      userListEl.innerHTML = \\x27<div class="empty">No users</div>\\x27;
+      return;
+    }
+    var html = \\x27<table style="width:100%;border-collapse:collapse;font-size:.85rem;">\\x27;
+    html += \\x27<tr style="text-align:left;border-bottom:1px solid #444;"><th>Email</th><th>Created</th><th></th></tr>\\x27;
+    users.forEach(function(u) {
+      var created = u.created_at ? new Date(u.created_at).toLocaleDateString() : "—";
+      html += \\x27<tr style="border-bottom:1px solid #333;">\\x27;
+      html += \\x27<td style="padding:6px 4px;">\\x27 + (u.email || "—") + \\x27</td>\\x27;
+      html += \\x27<td style="padding:6px 4px;color:#888;">\\x27 + created + \\x27</td>\\x27;
+      html += \\x27<td style="padding:6px 4px;text-align:right;"><button class="secondary" style="padding:2px 8px;font-size:.75rem;" onclick="window._deleteUser(\\x27\\x27\\x27 + u.id + \\x27\\x27\\x27)">Delete</button></td>\\x27;
+      html += \\x27</tr>\\x27;
+    });
+    html += \\x27</table>\\x27;
+    userListEl.innerHTML = html;
+  }
+
+  window._deleteUser = function(uid) {
+    if (!confirm("Delete this user? They will no longer be able to sign in.")) return;
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({action: "delete_user", user_id: uid}));
+    }
+  };
+
+  addUserBtn.addEventListener("click", function() {
+    var email = newUserEmail.value.trim();
+    var pass = newUserPass.value;
+    if (!email || !pass) { showError("Enter email and password"); return; }
+    if (pass.length < 6) { showError("Password must be at least 6 characters"); return; }
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({action: "create_user", email: email, password: pass}));
+      newUserEmail.value = "";
+      newUserPass.value = "";
+    }
+  });
 
   // Periodic refresh of recordings (restore link state after rebuild)
   setInterval(function() {

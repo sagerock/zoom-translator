@@ -182,6 +182,31 @@ async def upload_or_update_file(path: str, data: bytes, content_type: str, timeo
     )
 
 
+async def admin_list_users() -> list[dict]:
+    """Return all users via the Admin API."""
+    resp = await asyncio.to_thread(lambda: _client.auth.admin.list_users())
+    return [
+        {"id": u.id, "email": u.email, "created_at": u.created_at.isoformat() if u.created_at else None}
+        for u in resp
+    ]
+
+
+async def admin_create_user(email: str, password: str) -> dict:
+    """Create a new user via the Admin API (email auto-confirmed)."""
+    resp = await asyncio.to_thread(
+        lambda: _client.auth.admin.create_user(
+            {"email": email, "password": password, "email_confirm": True}
+        )
+    )
+    u = resp.user
+    return {"id": u.id, "email": u.email, "created_at": u.created_at.isoformat() if u.created_at else None}
+
+
+async def admin_delete_user(user_id: str) -> None:
+    """Delete a user via the Admin API."""
+    await asyncio.to_thread(lambda: _client.auth.admin.delete_user(user_id))
+
+
 async def get_signed_url(path: str, expires_in: int = 3600) -> str | None:
     """Generate a signed download URL for a storage object (with retry)."""
     for attempt in range(3):
