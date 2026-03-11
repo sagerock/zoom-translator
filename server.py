@@ -483,12 +483,19 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         if not user or not _is_admin(user):
             return connection.respond(403, "Forbidden")
         sessions = await supabase_client.get_all_sessions()
+        try:
+            all_users = await supabase_client.admin_list_users()
+            email_map = {u["id"]: u["email"] for u in all_users}
+        except Exception:
+            email_map = {}
         recordings = []
         for s in sessions:
             if s.get("clip_count", 0) > 0:
+                uid = s.get("user_id", "")
                 recordings.append({
                     "bot_id": s["bot_id"],
-                    "user_id": s.get("user_id", ""),
+                    "user_id": uid,
+                    "email": email_map.get(uid, uid[:8] if uid else "?"),
                     "clips": s["clip_count"],
                     "duration": s.get("duration"),
                     "status": s.get("status"),
@@ -527,6 +534,12 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                 per_user[uid]["clips"] += clips
                 per_user[uid]["minutes"] += (s.get("duration") or 0) / 60.0
                 per_user[uid]["api_cost"] += s.get("api_cost") or 0
+        # Build user_id -> email lookup
+        try:
+            all_users = await supabase_client.admin_list_users()
+            email_map = {u["id"]: u["email"] for u in all_users}
+        except Exception:
+            email_map = {}
         # Round per-user values and compute revenue/margin
         users_list = []
         for uid, u in per_user.items():
@@ -535,6 +548,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             u["revenue"] = round(u["minutes"] * 0.50, 2)
             u["margin"] = round(u["revenue"] - u["api_cost"], 2)
             u["user_id"] = uid
+            u["email"] = email_map.get(uid, uid[:8])
             users_list.append(u)
         users_list.sort(key=lambda x: x["minutes"], reverse=True)
         total_minutes = total_duration / 60.0
