@@ -57,6 +57,10 @@ class BotSession:
     audio_offset: float = 0.0  # cumulative audio seconds for SRT timing
     srt_buffer: str = ""
     transcript_buffer: str = ""
+    # Cost tracking (accumulated per utterance)
+    tts_chars: int = 0          # total characters sent to OpenAI TTS
+    deepl_chars: int = 0        # total characters sent to DeepL
+    deepgram_participants: int = 0  # peak concurrent ASR streams
 
 
 # bot_id → BotSession
@@ -70,6 +74,22 @@ listener_clients: dict[str, set[ServerConnection]] = {}
 
 # bot_ids currently building a synced MP3 (prevents duplicate builds)
 _synced_builds: set[str] = set()
+
+# ── Cost rates ─────────────────────────────────────────────────────────
+# Deepgram Nova-2: $0.0059/min (pay-as-you-go), billed per participant stream
+DEEPGRAM_PER_MIN = 0.0059
+# DeepL Free tier: $0 (500K chars/month limit). Set to paid rate when upgraded.
+DEEPL_PER_CHAR = 0.0  # paid plan: $25/1M chars = 0.000025
+# OpenAI TTS-1: $15/1M chars
+TTS_PER_CHAR = 0.000015
+
+
+def _calculate_costs(session: BotSession, meeting_minutes: float) -> dict[str, float]:
+    """Calculate API costs for a session."""
+    deepgram = meeting_minutes * max(session.deepgram_participants, 1) * DEEPGRAM_PER_MIN
+    deepl = session.deepl_chars * DEEPL_PER_CHAR
+    tts = session.tts_chars * TTS_PER_CHAR
+    return {"deepgram": deepgram, "deepl": deepl, "tts": tts, "total": deepgram + deepl + tts}
 
 
 # ── Auth helpers ───────────────────────────────────────────────────────
@@ -334,6 +354,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                     "clips": s["clip_count"],
                     "duration": s.get("duration"),
                     "status": s.get("status"),
+                    "api_cost": s.get("api_cost"),
                 })
         body = json.dumps(recordings)
         response = connection.respond(200, body)
@@ -358,6 +379,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                     "source_lang": s.get("source_lang", ""),
                     "target_lang": s.get("target_lang", ""),
                     "created_at": s.get("created_at", ""),
+                    "api_cost": s.get("api_cost"),
                 })
         body = json.dumps(recordings)
         response = connection.respond(200, body)
@@ -587,6 +609,18 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
     session.status = "stopped"
     await broadcast_status()
 
+    # Calculate API costs
+    meeting_minutes = (time.time() - session.recording_start) / 60.0 if session.recording_start else 0
+    costs = _calculate_costs(session, meeting_minutes)
+    log.info(
+        "Session costs for %s: Deepgram=$%.2f (%d min × %d streams), "
+        "DeepL=$%.2f (%d chars), TTS=$%.2f (%d chars), total=$%.2f",
+        bot_id[:8], costs["deepgram"], round(meeting_minutes), session.deepgram_participants,
+        costs["deepl"], session.deepl_chars,
+        costs["tts"], session.tts_chars,
+        costs["total"],
+    )
+
     # Upload final SRT and transcript to Supabase Storage
     duration = session.audio_offset
     if session.srt_buffer:
@@ -598,9 +632,10 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
             session.user_id, bot_id, "transcript.jsonl", session.transcript_buffer
         ))
 
-    # Update DB status
+    # Update DB status (including cost breakdown)
     asyncio.create_task(supabase_client.update_session_status(
-        bot_id, "stopped", clip_count=session.clip_count, duration=round(duration, 1)
+        bot_id, "stopped", clip_count=session.clip_count, duration=round(duration, 1),
+        api_cost=round(costs["total"], 4),
     ))
 
     # Remove from active sessions after broadcasting the stopped status
@@ -713,10 +748,12 @@ def make_on_utterance(session: BotSession):
     """Create an utterance callback bound to a specific bot session."""
     async def on_utterance(participant_id: str, text: str) -> None:
         target_lang = session.target_lang
+        session.deepl_chars += len(text)
         translated = await translate(text, target_lang)
         if translated is None:
             return
 
+        session.tts_chars += len(translated)
         mp3_b64 = await synthesize(translated, target_lang)
         await broadcast_audio(target_lang, mp3_b64, original=text, translated=translated)
         save_recording(session, mp3_b64, text, translated)
@@ -792,6 +829,9 @@ async def recall_handler(ws: ServerConnection) -> None:
                     stream = ASRStream(participant_id, on_utterance, source_lang=session.source_lang)
                     await stream.start()
                     session.asr_streams[participant_id] = stream
+                    session.deepgram_participants = max(
+                        session.deepgram_participants, len(session.asr_streams)
+                    )
 
                 await session.asr_streams[participant_id].send_audio(pcm_bytes)
 

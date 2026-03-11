@@ -464,10 +464,16 @@ HTML_PAGE = """\
         var shortId = r.bot_id.substring(0, 8);
         var info = r.clips + " clips";
         if (r.duration) info += " &middot; " + formatDuration(r.duration);
+        var costHtml = "";
+        if (r.api_cost != null && r.duration) {
+          var revenue = (r.duration / 60) * 0.50;
+          costHtml = ' &middot; <span style="color:#27ae60">cost $' + r.api_cost.toFixed(2) + '</span>' +
+            ' &middot; <span style="color:#2980b9">revenue $' + revenue.toFixed(2) + '</span>';
+        }
         html += '<div class="bot-row">' +
           '<div class="bot-info">' +
             '<strong>' + shortId + '</strong> ' +
-            '<span style="color:#888">' + info + '</span>' +
+            '<span style="color:#888">' + info + costHtml + '</span>' +
             '<div class="dl-links">' +
               '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
@@ -495,6 +501,12 @@ HTML_PAGE = """\
         var langInfo = (r.source_lang || "?").toUpperCase() + " &rarr; " + (r.target_lang || "?").toUpperCase();
         var info = r.clips + " clips";
         if (r.duration) info += " &middot; " + formatDuration(r.duration);
+        if (r.api_cost != null && r.duration) {
+          var rev = (r.duration / 60) * 0.50;
+          info += ' &middot; <span style="color:#27ae60">cost $' + r.api_cost.toFixed(2) + '</span>';
+          info += ' &middot; <span style="color:#2980b9">rev $' + rev.toFixed(2) + '</span>';
+          info += ' &middot; <span style="color:#8e44ad">margin $' + (rev - r.api_cost).toFixed(2) + '</span>';
+        }
         var dateStr = r.created_at ? new Date(r.created_at).toLocaleDateString() : "";
         html += '<div class="bot-row">' +
           '<div class="bot-info">' +

@@ -74,13 +74,16 @@ async def update_session_status(
     status: str,
     clip_count: int | None = None,
     duration: float | None = None,
+    api_cost: float | None = None,
 ) -> None:
-    """Update a session's status (and optionally clip_count / duration)."""
+    """Update a session's status (and optionally clip_count / duration / api_cost)."""
     updates: dict[str, Any] = {"status": status}
     if clip_count is not None:
         updates["clip_count"] = clip_count
     if duration is not None:
         updates["duration"] = duration
+    if api_cost is not None:
+        updates["api_cost"] = api_cost
     if status == "stopped":
         updates["stopped_at"] = datetime.now(timezone.utc).isoformat()
     await asyncio.to_thread(
