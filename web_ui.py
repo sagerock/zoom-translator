@@ -523,6 +523,13 @@ HTML_PAGE = """\
         services.push('<span style="color:#2980b9;">Deepgram this month: $' + d.deepgram_cost_this_month.toFixed(2) +
           ' (' + d.deepgram_hours_this_month + ' hrs)</span>');
       }
+      if (d.deepl_chars_used != null) {
+        var pct = Math.round(d.deepl_chars_used / d.deepl_chars_limit * 100);
+        var color = pct > 80 ? '#e74c3c' : '#27ae60';
+        services.push('<span style="color:' + color + ';">DeepL: ' +
+          d.deepl_chars_used.toLocaleString() + ' / ' + d.deepl_chars_limit.toLocaleString() +
+          ' chars (' + pct + '%)</span>');
+      }
       if (services.length > 0) {
         html += '<div style="margin-top:8px;font-size:.8rem;color:#888;">' + services.join(' &middot; ') + '</div>';
       }

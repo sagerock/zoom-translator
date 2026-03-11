@@ -487,6 +487,22 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                     dashboard["deepgram_cost_this_month"] = round(dg_hours * 60 * DEEPGRAM_PER_MIN, 2)
             except Exception:
                 log.exception("Failed to fetch Deepgram usage")
+
+        # Fetch DeepL usage (free tier: 500K chars/month)
+        try:
+            deepl_url = "https://api-free.deepl.com/v2/usage"
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    deepl_url,
+                    headers={"Authorization": f"DeepL-Auth-Key {config.DEEPL_API_KEY}"},
+                )
+            if resp.status_code == 200:
+                dl = resp.json()
+                dashboard["deepl_chars_used"] = dl.get("character_count", 0)
+                dashboard["deepl_chars_limit"] = dl.get("character_limit", 500000)
+        except Exception:
+            log.exception("Failed to fetch DeepL usage")
+
         body = json.dumps(dashboard)
         response = connection.respond(200, body)
         response.headers["Content-Type"] = "application/json"
