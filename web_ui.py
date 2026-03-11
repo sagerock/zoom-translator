@@ -787,7 +787,7 @@ HTML_PAGE = """\
       html += \\x27<tr style="border-bottom:1px solid #333;">\\x27;
       html += \\x27<td style="padding:6px 4px;">\\x27 + (u.email || "—") + \\x27</td>\\x27;
       html += \\x27<td style="padding:6px 4px;color:#888;">\\x27 + created + \\x27</td>\\x27;
-      html += \\x27<td style="padding:6px 4px;text-align:right;"><button class="secondary" style="padding:2px 8px;font-size:.75rem;" onclick="window._deleteUser(\\x27\\x27\\x27 + u.id + \\x27\\x27\\x27)">Delete</button></td>\\x27;
+      html += \\x27<td style="padding:6px 4px;text-align:right;"><button class="secondary" style="padding:2px 8px;font-size:.75rem;" onclick="window._deleteUser(\\x27 + "\\x27" + u.id + "\\x27" + \\x27)">Delete</button></td>\\x27;
       html += \\x27</tr>\\x27;
     });
     html += \\x27</table>\\x27;
