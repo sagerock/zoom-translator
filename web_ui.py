@@ -776,6 +776,8 @@ HTML_PAGE = """\
         <label for="mode-translate">Translation</label>
         <input type="radio" name="bot-mode" id="mode-notes" value="notes">
         <label for="mode-notes">Meeting Notes</label>
+        <input type="radio" name="bot-mode" id="mode-both" value="both">
+        <label for="mode-both">Both</label>
       </div>
 
       <label for="meeting-url">Meeting Link</label>
@@ -974,9 +976,9 @@ HTML_PAGE = """\
   modeRadios.forEach(function(r) {
     r.addEventListener("change", function() {
       var m = getMode();
-      translateOpts.style.display = m === "translate" ? "" : "none";
-      notesOpts.style.display = m === "notes" ? "" : "none";
-      startBtn.textContent = m === "notes" ? "Start Meeting Notes" : "Start Translation";
+      translateOpts.style.display = (m === "translate" || m === "both") ? "" : "none";
+      notesOpts.style.display = (m === "notes" || m === "both") ? "" : "none";
+      startBtn.textContent = m === "notes" ? "Start Meeting Notes" : m === "both" ? "Start Session" : "Start Translation";
     });
   });
 
@@ -1066,6 +1068,7 @@ HTML_PAGE = """\
       var shortId = b.bot_id.substring(0, 8);
       var ownerHtml = (isAdmin && b.user_id) ? ' <span class="owner-tag">user:' + b.user_id.substring(0,8) + '</span>' : '';
       var isNotes = b.mode === "notes";
+      var isBoth = b.mode === "both";
       var url = isNotes ? "" : listenUrl(b.target_lang);
       var dlHtml = "";
       if (b.clip_count > 0 && !isNotes) {
@@ -1078,6 +1081,7 @@ HTML_PAGE = """\
         '</div>';
       }
       var modeLabel = isNotes ? '<strong>MEETING NOTES</strong>' :
+        isBoth ? '<strong>' + b.source_lang.toUpperCase() + ' &rarr; ' + b.target_lang.toUpperCase() + ' + NOTES</strong>' :
         '<strong>' + b.source_lang.toUpperCase() + ' &rarr; ' + b.target_lang.toUpperCase() + '</strong>';
       html += '<div class="bot-row">' +
         '<div class="bot-info">' +
@@ -1129,6 +1133,18 @@ HTML_PAGE = """\
         meeting_url: meetingUrl,
         source_lang: notesLang.value
       }));
+    } else if (m === "both") {
+      var checks2 = document.querySelectorAll('input[name="target"]:checked');
+      var targets2 = [];
+      for (var i = 0; i < checks2.length; i++) targets2.push(checks2[i].value);
+      if (targets2.length === 0) { showError("Select at least one target language"); return; }
+      ws.send(JSON.stringify({
+        action: "start",
+        mode: "both",
+        meeting_url: meetingUrl,
+        source_lang: sourceSel.value,
+        target_langs: targets2
+      }));
     } else {
       var checks = document.querySelectorAll('input[name="target"]:checked');
       var targets = [];
@@ -1163,6 +1179,7 @@ HTML_PAGE = """\
         var r = recs[i];
         var shortId = r.bot_id.substring(0, 8);
         var isNotes = r.mode === "notes";
+        var isBoth = r.mode === "both";
         var info = isNotes ? "" : r.clips + " clips";
         if (r.duration) info += (info ? " &middot; " : "") + formatDuration(r.duration);
         var costHtml = "";
@@ -1176,6 +1193,14 @@ HTML_PAGE = """\
           linksHtml = '<div class="dl-links">' +
             '<a href="/meeting/' + r.bot_id + '" target="_blank">View Meeting Notes</a>' +
           '</div>';
+        } else if (isBoth) {
+          linksHtml = '<div class="dl-links">' +
+            '<a href="/meeting/' + r.bot_id + '" target="_blank">View Meeting Notes</a>' +
+            '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
+            '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
+            '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
+            '<a href="#" data-video-bot="' + r.bot_id + '" onclick="downloadVideo(\\x27' + r.bot_id + '\\x27);return false;">Dubbed Video</a>' +
+          '</div>';
         } else {
           linksHtml = '<div class="dl-links">' +
             '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
@@ -1184,7 +1209,7 @@ HTML_PAGE = """\
             '<a href="#" data-video-bot="' + r.bot_id + '" onclick="downloadVideo(\\x27' + r.bot_id + '\\x27);return false;">Dubbed Video</a>' +
           '</div>';
         }
-        var label = isNotes ? "NOTES" : shortId;
+        var label = isNotes ? "NOTES" : isBoth ? shortId + " + NOTES" : shortId;
         html += '<div class="bot-row">' +
           '<div class="bot-info">' +
             '<strong>' + label + '</strong> ' +

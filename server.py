@@ -55,7 +55,7 @@ class BotSession:
     source_lang: str
     target_lang: str
     user_id: str = ""
-    mode: str = "translate"  # "translate" | "notes"
+    mode: str = "translate"  # "translate" | "notes" | "both"
     status: str = "starting"  # starting | in_call | stopped
     asr_streams: dict[str, ASRStream] = field(default_factory=dict)
     participant_names: dict[str, str] = field(default_factory=dict)
@@ -587,8 +587,8 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         recordings = []
         for s in sessions:
             mode = s.get("mode", "translate")
-            # Include if it has clips (translate) or is a notes session
-            if s.get("clip_count", 0) > 0 or mode == "notes":
+            # Include if it has clips (translate/both) or is a notes session
+            if s.get("clip_count", 0) > 0 or mode in ("notes", "both"):
                 recordings.append({
                     "bot_id": s["bot_id"],
                     "clips": s["clip_count"],
@@ -617,7 +617,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         recordings = []
         for s in sessions:
             mode = s.get("mode", "translate")
-            if s.get("clip_count", 0) > 0 or mode == "notes":
+            if s.get("clip_count", 0) > 0 or mode in ("notes", "both"):
                 uid = s.get("user_id", "")
                 recordings.append({
                     "bot_id": s["bot_id"],
@@ -993,7 +993,7 @@ async def _handle_start(ws: ServerConnection, msg: dict, user_id: str) -> None:
             log.exception("Failed to create notes bot")
             await ws.send(json.dumps({"type": "error", "message": f"Failed to start notes bot: {e}"}))
     else:
-        # Translation mode
+        # Translation mode (or "both" = translate + notes)
         source_lang = msg.get("source_lang", "en")
         target_langs = msg.get("target_langs", [])
         if not target_langs:
@@ -1011,15 +1011,16 @@ async def _handle_start(ws: ServerConnection, msg: dict, user_id: str) -> None:
                     source_lang=source_lang,
                     target_lang=target_lang,
                     user_id=user_id,
+                    mode=mode,  # "translate" or "both"
                     status="in_call",
                 )
                 bot_sessions[bot_id] = session
                 _init_recording(session)
                 asyncio.create_task(supabase_client.create_session(
                     user_id=user_id, bot_id=bot_id, meeting_url=meeting_url,
-                    source_lang=source_lang, target_lang=target_lang,
+                    source_lang=source_lang, target_lang=target_lang, mode=mode,
                 ))
-                log.info("Started bot %s for %s → %s (user=%s)", bot_id, source_lang, target_lang, user_id[:8])
+                log.info("Started bot %s for %s → %s mode=%s (user=%s)", bot_id, source_lang, target_lang, mode, user_id[:8])
             except Exception as e:
                 log.exception("Failed to create bot for %s", target_lang)
                 await ws.send(json.dumps({"type": "error", "message": f"Failed to create bot for {lang_upper}: {e}"}))
@@ -1059,8 +1060,8 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
             session.user_id, bot_id, "transcript.jsonl", session.transcript_buffer
         ))
 
-    # Notes mode: generate summary before calculating costs (adds Sonnet tokens)
-    if session.mode == "notes" and session.transcript_buffer:
+    # Generate summary for notes/both modes before calculating costs (adds Sonnet tokens)
+    if session.mode in ("notes", "both") and session.transcript_buffer:
         await _generate_meeting_summary(session)
 
     # Calculate API costs
@@ -1083,8 +1084,8 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
             session.user_id, bot_id, "subtitles.srt", session.srt_buffer
         ))
 
-    # For notes mode, use wall-clock duration; for translate, use audio offset
-    duration = meeting_minutes * 60 if session.mode == "notes" else session.audio_offset
+    # For notes/both mode, use wall-clock duration; for translate-only, use audio offset
+    duration = meeting_minutes * 60 if session.mode in ("notes", "both") else session.audio_offset
 
     # Update DB status (including cost breakdown)
     asyncio.create_task(supabase_client.update_session_status(
@@ -1345,6 +1346,34 @@ def make_on_utterance_notes(session: BotSession):
     return on_utterance
 
 
+def make_on_utterance_both(session: BotSession):
+    """Create an utterance callback that does translation+TTS AND records transcript."""
+    async def on_utterance(participant_id: str, text: str) -> None:
+        # Record transcript with speaker labels (same as notes mode)
+        speaker = session.participant_names.get(participant_id, participant_id[:8])
+        elapsed = time.time() - session.recording_start if session.recording_start else 0
+        entry = {
+            "elapsed": round(elapsed, 2),
+            "speaker": speaker,
+            "text": text,
+        }
+        session.transcript_buffer += json.dumps(entry, ensure_ascii=False) + "\n"
+
+        # Translate + TTS + broadcast (same as translate mode)
+        target_lang = session.target_lang
+        session.deepl_chars += len(text)
+        translated = await translate(text, target_lang)
+        if translated is None:
+            return
+
+        session.tts_chars += len(translated)
+        mp3_b64 = await synthesize(translated, target_lang)
+        await broadcast_audio(target_lang, mp3_b64, original=text, translated=translated)
+        save_recording(session, mp3_b64, text, translated)
+
+    return on_utterance
+
+
 # ── Recall.ai audio handler (default path) ────────────────────────────
 
 async def recall_handler(ws: ServerConnection) -> None:
@@ -1415,6 +1444,8 @@ async def recall_handler(ws: ServerConnection) -> None:
                 if participant_id not in session.asr_streams:
                     if session.mode == "notes":
                         on_utterance = make_on_utterance_notes(session)
+                    elif session.mode == "both":
+                        on_utterance = make_on_utterance_both(session)
                     else:
                         on_utterance = make_on_utterance(session)
                     stream = ASRStream(participant_id, on_utterance, source_lang=session.source_lang)
