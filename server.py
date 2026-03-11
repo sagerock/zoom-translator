@@ -78,6 +78,8 @@ _synced_builds: set[str] = set()
 
 # ── Cost rates ─────────────────────────────────────────────────────────
 # Recall.ai: $0.50/hr prorated to the second, billed per bot (not per participant)
+# Billed from joining_call → done (includes waiting room + post-call processing).
+# Fatal bots are not billed.
 RECALL_PER_MIN = 0.50 / 60
 # Deepgram Nova-2: $0.0059/min (pay-as-you-go), billed per participant stream
 DEEPGRAM_PER_MIN = 0.0059
@@ -432,14 +434,14 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                 for bot in bots:
                     start_t = end_t = None
                     for sc in bot.get("status_changes", []):
-                        if sc["code"] == "in_call_recording":
+                        # Recall bills from joining_call to terminal state (done)
+                        if sc["code"] == "joining_call" and start_t is None:
                             start_t = sc["created_at"]
-                        if sc["code"] == "call_ended":
+                        if sc["code"] in ("done", "fatal"):
                             end_t = sc["created_at"]
-                    if start_t and end_t:
-                        from datetime import datetime as _dt
-                        t0 = _dt.fromisoformat(start_t.replace("Z", "+00:00"))
-                        t1 = _dt.fromisoformat(end_t.replace("Z", "+00:00"))
+                    if start_t and end_t and bot.get("status_changes", [{}])[-1].get("code") != "fatal":
+                        t0 = datetime.fromisoformat(start_t.replace("Z", "+00:00"))
+                        t1 = datetime.fromisoformat(end_t.replace("Z", "+00:00"))
                         recall_minutes += (t1 - t0).total_seconds() / 60.0
                 dashboard["recall_total_minutes"] = round(recall_minutes, 1)
                 dashboard["recall_total_cost"] = round(recall_minutes * RECALL_PER_MIN, 2)
