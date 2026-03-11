@@ -512,12 +512,20 @@ HTML_PAGE = """\
       html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
         '<div style="font-size:1.8rem;font-weight:bold;color:#8e44ad;">$' + d.margin.toFixed(2) + '</div>' +
         '<div style="font-size:.75rem;color:#888;">Margin</div></div>';
-      if (d.deepgram_hours_this_month != null) {
-        html += '<div style="text-align:center;padding:10px;background:#f8f9fa;border-radius:8px;">' +
-          '<div style="font-size:1.8rem;font-weight:bold;color:#2980b9;">' + d.deepgram_hours_this_month + 'h</div>' +
-          '<div style="font-size:.75rem;color:#888;">Deepgram (month)</div></div>';
-      }
       html += '</div>';
+      // Service-level breakdown
+      var services = [];
+      if (d.recall_total_cost != null) {
+        services.push('<span style="color:#e67e22;">Recall: $' + d.recall_total_cost.toFixed(2) +
+          ' (' + d.recall_total_minutes + ' min, ' + d.recall_total_bots + ' bots)</span>');
+      }
+      if (d.deepgram_hours_this_month != null) {
+        services.push('<span style="color:#2980b9;">Deepgram this month: $' + d.deepgram_cost_this_month.toFixed(2) +
+          ' (' + d.deepgram_hours_this_month + ' hrs)</span>');
+      }
+      if (services.length > 0) {
+        html += '<div style="margin-top:8px;font-size:.8rem;color:#888;">' + services.join(' &middot; ') + '</div>';
+      }
       dashboardEl.innerHTML = html;
     }).catch(function() {});
   }

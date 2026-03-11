@@ -418,6 +418,35 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             "total_revenue": round(total_revenue, 2),
             "margin": round(total_revenue - total_api_cost, 2),
         }
+        # Fetch live Recall.ai usage from bot list
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{config.RECALL_API_BASE}/bot",
+                    params={"limit": 1000},
+                    headers={"Authorization": f"Token {config.RECALL_API_KEY}"},
+                )
+            if resp.status_code == 200:
+                bots = resp.json().get("results", [])
+                recall_minutes = 0.0
+                for bot in bots:
+                    start_t = end_t = None
+                    for sc in bot.get("status_changes", []):
+                        if sc["code"] == "in_call_recording":
+                            start_t = sc["created_at"]
+                        if sc["code"] == "call_ended":
+                            end_t = sc["created_at"]
+                    if start_t and end_t:
+                        from datetime import datetime as _dt
+                        t0 = _dt.fromisoformat(start_t.replace("Z", "+00:00"))
+                        t1 = _dt.fromisoformat(end_t.replace("Z", "+00:00"))
+                        recall_minutes += (t1 - t0).total_seconds() / 60.0
+                dashboard["recall_total_minutes"] = round(recall_minutes, 1)
+                dashboard["recall_total_cost"] = round(recall_minutes * RECALL_PER_MIN, 2)
+                dashboard["recall_total_bots"] = len(bots)
+        except Exception:
+            log.exception("Failed to fetch Recall.ai usage")
+
         # Fetch live Deepgram usage if admin key is configured
         if config.DEEPGRAM_ADMIN_KEY and config.DEEPGRAM_PROJECT_ID:
             try:
