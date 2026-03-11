@@ -391,6 +391,7 @@ HTML_PAGE = """\
           '<a href="#" data-mp3-bot="' + b.bot_id + '" onclick="downloadMp3(\\x27' + b.bot_id + '\\x27);return false;">Audio MP3</a>' +
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
+          '<a href="#" data-video-bot="' + b.bot_id + '" onclick="downloadVideo(\\x27' + b.bot_id + '\\x27);return false;">Dubbed Video</a>' +
           '(' + b.clip_count + ' clips)' +
         '</div>';
       }
@@ -483,6 +484,7 @@ HTML_PAGE = """\
               '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
+              '<a href="#" data-video-bot="' + r.bot_id + '" onclick="downloadVideo(\\x27' + r.bot_id + '\\x27);return false;">Dubbed Video</a>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -592,6 +594,7 @@ HTML_PAGE = """\
               '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
               '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
+              '<a href="#" data-video-bot="' + r.bot_id + '" onclick="downloadVideo(\\x27' + r.bot_id + '\\x27);return false;">Dubbed Video</a>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -684,11 +687,73 @@ HTML_PAGE = """\
     poll();
   };
 
-  // Periodic refresh of recordings (restore MP3 link state after rebuild)
+  // Download dubbed video (background build + polling)
+  var videoUrls = {};
+  var videoBuilding = {};
+
+  function applyVideoState() {
+    Object.keys(videoUrls).forEach(function(botId) {
+      var el = document.querySelector("[data-video-bot=\\x27" + botId + "\\x27]");
+      if (el) {
+        el.href = videoUrls[botId];
+        el.textContent = "Download Video";
+        el.style.fontWeight = "bold";
+        el.target = "_blank";
+        el.rel = "noopener";
+        el.onclick = function(e) { /* allow default navigation */ };
+      }
+    });
+    Object.keys(videoBuilding).forEach(function(botId) {
+      if (videoUrls[botId]) return;
+      var el = document.querySelector("[data-video-bot=\\x27" + botId + "\\x27]");
+      if (el) {
+        el.textContent = "Building Video...";
+        el.style.color = "#0c5460";
+        el.onclick = function(e) { e.preventDefault(); };
+      }
+    });
+  }
+
+  window.downloadVideo = function(botId) {
+    var shortId = botId.substring(0, 8);
+    if (videoBuilding[botId] || videoUrls[botId]) return;
+    videoBuilding[botId] = true;
+
+    var linkEl = document.querySelector("[data-video-bot=\\x27" + botId + "\\x27]");
+    if (linkEl) {
+      linkEl.textContent = "Building Video...";
+      linkEl.style.color = "#0c5460";
+      linkEl.onclick = function(e) { e.preventDefault(); };
+    }
+
+    function poll() {
+      fetch("/api/recordings/" + botId + "/video", {headers: authHeaders(), redirect: "follow"})
+        .then(function(r) {
+          if (r.redirected) {
+            videoUrls[botId] = r.url;
+            delete videoBuilding[botId];
+            applyVideoState();
+            return;
+          }
+          if (r.status === 202) {
+            setTimeout(poll, 10000);
+            return;
+          }
+          throw new Error("Server error " + r.status);
+        })
+        .catch(function() {
+          delete videoBuilding[botId];
+          showError("Failed to build video for " + shortId);
+        });
+    }
+    poll();
+  };
+
+  // Periodic refresh of recordings (restore link state after rebuild)
   setInterval(function() {
     loadRecordings();
     if (isAdmin) { loadDashboard(); loadAdminSessions(); }
-    setTimeout(applyMp3State, 500);
+    setTimeout(function() { applyMp3State(); applyVideoState(); }, 500);
   }, 15000);
 })();
 </script>

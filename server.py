@@ -73,8 +73,9 @@ mgmt_clients: dict[ServerConnection, dict] = {}
 # target_lang → set of WebSocket connections (listener browsers)
 listener_clients: dict[str, set[ServerConnection]] = {}
 
-# bot_ids currently building a synced MP3 (prevents duplicate builds)
+# bot_ids currently building a synced MP3 or dubbed video (prevents duplicate builds)
 _synced_builds: set[str] = set()
+_video_builds: set[str] = set()
 
 # ── Cost rates ─────────────────────────────────────────────────────────
 # Recall.ai: $0.50/hr prorated to the second, billed per bot (not per participant)
@@ -318,6 +319,113 @@ async def _background_build_synced(owner_id: str, bot_id: str) -> None:
         _synced_builds.discard(bot_id)
 
 
+# ── Dubbed video builder ──────────────────────────────────────────────
+
+async def _get_recall_video_url(bot_id: str) -> str | None:
+    """Fetch the video_mixed download URL from Recall.ai for a bot."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{config.RECALL_API_BASE}/bot/{bot_id}",
+                headers={"Authorization": f"Token {config.RECALL_API_KEY}"},
+            )
+        if resp.status_code != 200:
+            log.error("Recall API error %s for bot %s", resp.status_code, bot_id[:8])
+            return None
+        bot_data = resp.json()
+        recordings = bot_data.get("recordings", [])
+        if not recordings:
+            return None
+        video = recordings[0].get("media_shortcuts", {}).get("video_mixed", {})
+        if video.get("status", {}).get("code") != "done":
+            return None
+        return video.get("data", {}).get("download_url")
+    except Exception:
+        log.exception("Failed to get Recall video URL for %s", bot_id[:8])
+        return None
+
+
+async def _build_dubbed_video(owner_id: str, bot_id: str) -> None:
+    """Download meeting video from Recall, merge with synced translation audio,
+    upload dubbed MP4 to Supabase storage."""
+    try:
+        # 1. Get the Recall video URL
+        video_url = await _get_recall_video_url(bot_id)
+        if not video_url:
+            raise ValueError("No video recording available from Recall.ai")
+        log.info("Dubbed video build started for %s — downloading video", bot_id[:8])
+
+        # 2. Get or build the synced MP3
+        synced_path = f"{owner_id}/{bot_id}/synced.mp3"
+        synced_url = await supabase_client.get_signed_url(synced_path)
+        if not synced_url:
+            log.info("Synced MP3 not found for %s — building it first", bot_id[:8])
+            mp3_bytes = await _build_synced_mp3(owner_id, bot_id)
+            await supabase_client.upload_or_update_file(synced_path, mp3_bytes, "audio/mpeg")
+            synced_url = await supabase_client.get_signed_url(synced_path)
+            if not synced_url:
+                raise ValueError("Failed to get synced MP3 URL after build")
+
+        # 3. Download video and synced MP3 to temp files
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, "meeting.mp4")
+            audio_path = os.path.join(tmpdir, "synced.mp3")
+            output_path = os.path.join(tmpdir, "dubbed.mp4")
+
+            async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
+                # Download video
+                log.info("Downloading meeting video for %s...", bot_id[:8])
+                async with client.stream("GET", video_url) as resp:
+                    resp.raise_for_status()
+                    with open(video_path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                            f.write(chunk)
+                video_size = os.path.getsize(video_path)
+                log.info("Video downloaded for %s: %.1f MB", bot_id[:8], video_size / 1_000_000)
+
+                # Download synced MP3
+                async with client.stream("GET", synced_url) as resp:
+                    resp.raise_for_status()
+                    with open(audio_path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                            f.write(chunk)
+
+            # 4. Merge with ffmpeg: keep video, duck original audio, mix in translation
+            log.info("Merging dubbed video for %s...", bot_id[:8])
+            proc = await asyncio.to_thread(lambda: subprocess.run([
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-i", audio_path,
+                "-filter_complex",
+                "[0:a]volume=0.3[orig];[1:a]aresample=async=1[tts];[orig][tts]amix=inputs=2:duration=first[out]",
+                "-map", "0:v", "-map", "[out]",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                output_path,
+            ], capture_output=True))
+
+            if proc.returncode != 0:
+                log.error("ffmpeg dubbed video failed for %s: %s",
+                          bot_id[:8], proc.stderr.decode(errors="replace")[-500:])
+                raise ValueError("ffmpeg merge failed")
+
+            output_size = os.path.getsize(output_path)
+            log.info("Dubbed video built for %s: %.1f MB — uploading to storage",
+                     bot_id[:8], output_size / 1_000_000)
+
+            # 5. Upload to Supabase
+            with open(output_path, "rb") as f:
+                dubbed_bytes = f.read()
+
+        dubbed_path = f"{owner_id}/{bot_id}/dubbed.mp4"
+        await supabase_client.upload_or_update_file(dubbed_path, dubbed_bytes, "video/mp4")
+        log.info("Dubbed video uploaded successfully for %s", bot_id[:8])
+
+    except Exception:
+        log.exception("Dubbed video build/upload FAILED for %s", bot_id[:8])
+    finally:
+        _video_builds.discard(bot_id)
+
+
 # ── HTTP request handler (serves web UI) ──────────────────────────────
 
 async def process_request(connection: ServerConnection, request: Request) -> Response | None:
@@ -541,6 +649,45 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             # Start background build
             _synced_builds.add(bot_id)
             asyncio.create_task(_background_build_synced(owner_id, bot_id))
+            body = json.dumps({"status": "building"})
+            response = connection.respond(202, body)
+            response.headers["Content-Type"] = "application/json"
+            return response
+        return connection.respond(404, "Not Found")
+
+    # API: dubbed video — check/build/redirect
+    if request.path.startswith("/api/recordings/") and request.path.endswith("/video"):
+        user = await _extract_user_from_header(request)
+        if not user:
+            return connection.respond(401, "Unauthorized")
+        user_id = user["sub"]
+        admin = _is_admin(user)
+        parts = request.path.strip("/").split("/")
+        if len(parts) == 4:
+            bot_id = parts[2]
+            session = await supabase_client.get_session_by_bot_id(bot_id)
+            if not session or (not admin and session.get("user_id") != user_id):
+                return connection.respond(403, "Forbidden")
+            owner_id = session.get("user_id", user_id)
+            # If a build is already in progress → return 202
+            if bot_id in _video_builds:
+                body = json.dumps({"status": "building"})
+                response = connection.respond(202, body)
+                response.headers["Content-Type"] = "application/json"
+                return response
+
+            dubbed_path = f"{owner_id}/{bot_id}/dubbed.mp4"
+
+            # If dubbed.mp4 already exists → redirect immediately
+            signed_url = await supabase_client.get_signed_url(dubbed_path)
+            if signed_url:
+                response = connection.respond(302, "")
+                response.headers["Location"] = signed_url
+                return response
+
+            # Start background build
+            _video_builds.add(bot_id)
+            asyncio.create_task(_build_dubbed_video(owner_id, bot_id))
             body = json.dumps({"status": "building"})
             response = connection.respond(202, body)
             response.headers["Content-Type"] = "application/json"
