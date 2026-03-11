@@ -53,6 +53,7 @@ async def create_session(
     meeting_url: str,
     source_lang: str,
     target_lang: str,
+    mode: str = "translate",
 ) -> dict:
     """Insert a new bot_sessions row."""
     row = {
@@ -61,6 +62,7 @@ async def create_session(
         "meeting_url": meeting_url,
         "source_lang": source_lang,
         "target_lang": target_lang,
+        "mode": mode,
         "status": "in_call",
     }
     resp = await asyncio.to_thread(
@@ -89,6 +91,21 @@ async def update_session_status(
     await asyncio.to_thread(
         lambda: _client.table("bot_sessions").update(updates).eq("bot_id", bot_id).execute()
     )
+
+
+async def update_session_summary(bot_id: str, summary: str) -> None:
+    """Store the AI-generated meeting summary."""
+    await asyncio.to_thread(
+        lambda: _client.table("bot_sessions").update({"summary": summary}).eq("bot_id", bot_id).execute()
+    )
+
+
+async def get_session(bot_id: str) -> dict | None:
+    """Return a single session by bot_id."""
+    resp = await asyncio.to_thread(
+        lambda: _client.table("bot_sessions").select("*").eq("bot_id", bot_id).limit(1).execute()
+    )
+    return resp.data[0] if resp.data else None
 
 
 async def get_user_sessions(user_id: str) -> list[dict]:

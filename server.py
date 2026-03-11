@@ -26,13 +26,17 @@ import websockets
 from websockets.asyncio.server import serve, ServerConnection
 from websockets.http11 import Request, Response
 
+from openai import AsyncOpenAI
+
 import config
 import supabase_client
 from pipeline.asr import ASRStream
 from pipeline.translator import translate
 from pipeline.tts import synthesize
 from recall_client import create_bot, stop_bot
-from web_ui import HTML_PAGE, LISTEN_PAGE
+
+_openai = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+from web_ui import HTML_PAGE, LISTEN_PAGE, MEETING_PAGE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,8 +55,10 @@ class BotSession:
     source_lang: str
     target_lang: str
     user_id: str = ""
+    mode: str = "translate"  # "translate" | "notes"
     status: str = "starting"  # starting | in_call | stopped
     asr_streams: dict[str, ASRStream] = field(default_factory=dict)
+    participant_names: dict[str, str] = field(default_factory=dict)
     recording_start: float = 0.0
     clip_count: int = 0
     audio_offset: float = 0.0  # cumulative audio seconds for SRT timing
@@ -62,6 +68,8 @@ class BotSession:
     tts_chars: int = 0          # total characters sent to OpenAI TTS
     deepl_chars: int = 0        # total characters sent to DeepL
     deepgram_participants: int = 0  # peak concurrent ASR streams
+    gpt4o_input_tokens: int = 0
+    gpt4o_output_tokens: int = 0
 
 
 # bot_id → BotSession
@@ -88,6 +96,9 @@ DEEPGRAM_PER_MIN = 0.0059
 DEEPL_PER_CHAR = 0.0  # paid plan: $25/1M chars = 0.000025
 # OpenAI TTS-1: $15/1M chars
 TTS_PER_CHAR = 0.000015
+# OpenAI GPT-4o: $2.50/1M input tokens, $10/1M output tokens
+GPT4O_INPUT_PER_TOKEN = 0.0000025
+GPT4O_OUTPUT_PER_TOKEN = 0.00001
 
 
 def _calculate_costs(session: BotSession, meeting_minutes: float) -> dict[str, float]:
@@ -96,8 +107,62 @@ def _calculate_costs(session: BotSession, meeting_minutes: float) -> dict[str, f
     deepgram = meeting_minutes * max(session.deepgram_participants, 1) * DEEPGRAM_PER_MIN
     deepl = session.deepl_chars * DEEPL_PER_CHAR
     tts = session.tts_chars * TTS_PER_CHAR
-    total = recall + deepgram + deepl + tts
-    return {"recall": recall, "deepgram": deepgram, "deepl": deepl, "tts": tts, "total": total}
+    gpt4o = (session.gpt4o_input_tokens * GPT4O_INPUT_PER_TOKEN
+             + session.gpt4o_output_tokens * GPT4O_OUTPUT_PER_TOKEN)
+    total = recall + deepgram + deepl + tts + gpt4o
+    return {"recall": recall, "deepgram": deepgram, "deepl": deepl, "tts": tts, "gpt4o": gpt4o, "total": total}
+
+
+async def _generate_meeting_summary(session: BotSession) -> None:
+    """Generate an AI summary from the transcript and store it."""
+    try:
+        # Build readable transcript from JSONL
+        lines = []
+        for line in session.transcript_buffer.strip().split("\n"):
+            if not line:
+                continue
+            entry = json.loads(line)
+            speaker = entry.get("speaker", "Unknown")
+            text = entry.get("text", entry.get("original", ""))
+            elapsed = entry.get("elapsed", 0)
+            mins, secs = divmod(int(elapsed), 60)
+            lines.append(f"[{mins:02d}:{secs:02d}] {speaker}: {text}")
+
+        if not lines:
+            return
+
+        transcript_text = "\n".join(lines)
+
+        resp = await _openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": (
+                    "You are a meeting notes assistant. Summarize the following meeting transcript. "
+                    "Include:\n"
+                    "1. **Summary** — A concise overview of what was discussed\n"
+                    "2. **Key Discussion Points** — The main topics covered\n"
+                    "3. **Decisions Made** — Any decisions that were reached\n"
+                    "4. **Action Items** — Tasks assigned, with owners if mentioned\n"
+                    "5. **Follow-ups** — Anything that needs further discussion\n\n"
+                    "Use markdown formatting. Be concise but thorough."
+                )},
+                {"role": "user", "content": transcript_text},
+            ],
+        )
+
+        summary = resp.choices[0].message.content
+        session.gpt4o_input_tokens += resp.usage.prompt_tokens
+        session.gpt4o_output_tokens += resp.usage.completion_tokens
+
+        # Store summary in DB and Storage
+        await supabase_client.update_session_summary(session.bot_id, summary)
+        await supabase_client.upload_text_file(
+            session.user_id, session.bot_id, "summary.md", summary
+        )
+        log.info("Generated summary for %s (%d input, %d output tokens)",
+                 session.bot_id[:8], resp.usage.prompt_tokens, resp.usage.completion_tokens)
+    except Exception:
+        log.exception("Failed to generate summary for %s", session.bot_id[:8])
 
 
 # ── Auth helpers ───────────────────────────────────────────────────────
@@ -451,9 +516,65 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         response.headers["Content-Type"] = "text/html; charset=utf-8"
         return response
 
+    # Meeting review page: /meeting/<bot_id>
+    if request.path.startswith("/meeting/"):
+        parts = request.path.strip("/").split("/")
+        if len(parts) >= 2:
+            bot_id = parts[1]
+            page = MEETING_PAGE.replace("__SUPABASE_URL__", config.SUPABASE_URL)
+            page = page.replace("__SUPABASE_ANON_KEY__", config.SUPABASE_ANON_KEY)
+            page = page.replace("__BOT_ID__", bot_id)
+            response = connection.respond(200, page)
+            response.headers["Content-Type"] = "text/html; charset=utf-8"
+            return response
+
     if request.path == "/health":
         response = connection.respond(200, "ok")
         return response
+
+    # API: meeting data for review page
+    if request.path.startswith("/api/meeting/"):
+        parts = request.path.strip("/").split("/")
+        if len(parts) >= 3:
+            bot_id = parts[2]
+            user = await _extract_user_from_header(request)
+            if not user:
+                return connection.respond(401, "Unauthorized")
+            session_data = await supabase_client.get_session(bot_id)
+            if not session_data:
+                return connection.respond(404, "Session not found")
+            # Verify ownership or admin
+            if session_data.get("user_id") != user["sub"] and not _is_admin(user):
+                return connection.respond(403, "Forbidden")
+            # Load transcript from storage
+            transcript_lines = []
+            try:
+                owner_id = session_data.get("user_id", "")
+                signed_url = await supabase_client.get_signed_url(
+                    f"{owner_id}/{bot_id}/transcript.jsonl"
+                )
+                if signed_url:
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        resp = await client.get(signed_url)
+                        if resp.status_code == 200:
+                            for line in resp.text.strip().split("\n"):
+                                if line:
+                                    transcript_lines.append(json.loads(line))
+            except Exception:
+                log.exception("Failed to load transcript for %s", bot_id)
+            result = {
+                "bot_id": bot_id,
+                "summary": session_data.get("summary", ""),
+                "transcript": transcript_lines,
+                "source_lang": session_data.get("source_lang", ""),
+                "mode": session_data.get("mode", "translate"),
+                "duration": session_data.get("duration"),
+                "created_at": session_data.get("created_at", ""),
+            }
+            body = json.dumps(result)
+            response = connection.respond(200, body)
+            response.headers["Content-Type"] = "application/json"
+            return response
 
     # API: list user's recordings from Supabase
     if request.path == "/api/recordings":
@@ -464,13 +585,17 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         sessions = await supabase_client.get_user_sessions(user_id)
         recordings = []
         for s in sessions:
-            if s.get("clip_count", 0) > 0:
+            mode = s.get("mode", "translate")
+            # Include if it has clips (translate) or is a notes session
+            if s.get("clip_count", 0) > 0 or mode == "notes":
                 recordings.append({
                     "bot_id": s["bot_id"],
                     "clips": s["clip_count"],
                     "duration": s.get("duration"),
                     "status": s.get("status"),
                     "api_cost": s.get("api_cost"),
+                    "mode": mode,
+                    "summary": bool(s.get("summary")),
                 })
         body = json.dumps(recordings)
         response = connection.respond(200, body)
@@ -490,7 +615,8 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             email_map = {}
         recordings = []
         for s in sessions:
-            if s.get("clip_count", 0) > 0:
+            mode = s.get("mode", "translate")
+            if s.get("clip_count", 0) > 0 or mode == "notes":
                 uid = s.get("user_id", "")
                 recordings.append({
                     "bot_id": s["bot_id"],
@@ -501,6 +627,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                     "status": s.get("status"),
                     "source_lang": s.get("source_lang", ""),
                     "target_lang": s.get("target_lang", ""),
+                    "mode": mode,
                     "created_at": s.get("created_at", ""),
                     "api_cost": s.get("api_cost"),
                 })
@@ -762,6 +889,7 @@ def _sessions_snapshot(user_id: str, admin: bool = False) -> list[dict]:
             "meeting_url": s.meeting_url,
             "source_lang": s.source_lang,
             "target_lang": s.target_lang,
+            "mode": s.mode,
             "status": s.status,
             "clip_count": s.clip_count,
         }
@@ -818,6 +946,8 @@ async def mgmt_handler(ws: ServerConnection, user: dict) -> None:
                 await _handle_create_user(ws, msg, admin)
             elif action == "delete_user":
                 await _handle_delete_user(ws, msg, user_id, admin)
+            elif action == "ask":
+                await _handle_ask(ws, msg, user_id, admin)
             else:
                 await ws.send(json.dumps({"type": "error", "message": f"Unknown action: {action}"}))
 
@@ -830,45 +960,68 @@ async def mgmt_handler(ws: ServerConnection, user: dict) -> None:
 
 async def _handle_start(ws: ServerConnection, msg: dict, user_id: str) -> None:
     meeting_url = msg.get("meeting_url", "").strip()
-    source_lang = msg.get("source_lang", "en")
-    target_langs = msg.get("target_langs", [])
+    mode = msg.get("mode", "translate")
 
     if not meeting_url:
         await ws.send(json.dumps({"type": "error", "message": "Missing meeting_url"}))
         return
-    if not target_langs:
-        await ws.send(json.dumps({"type": "error", "message": "Select at least one target language"}))
-        return
 
-    for target_lang in target_langs:
-        lang_upper = target_lang.upper()
-        bot_name = f"Translator ({lang_upper})"
+    if mode == "notes":
+        # Notes mode: single bot, no translation
+        source_lang = msg.get("source_lang", "en")
+        bot_name = "Meeting Notes"
         try:
             bot_id = await create_bot(meeting_url, config.PUBLIC_WSS_URL, bot_name=bot_name)
             session = BotSession(
                 bot_id=bot_id,
                 meeting_url=meeting_url,
                 source_lang=source_lang,
-                target_lang=target_lang,
+                target_lang="",
                 user_id=user_id,
+                mode="notes",
                 status="in_call",
             )
             bot_sessions[bot_id] = session
             _init_recording(session)
-
-            # Persist to Supabase DB
             asyncio.create_task(supabase_client.create_session(
-                user_id=user_id,
-                bot_id=bot_id,
-                meeting_url=meeting_url,
-                source_lang=source_lang,
-                target_lang=target_lang,
+                user_id=user_id, bot_id=bot_id, meeting_url=meeting_url,
+                source_lang=source_lang, target_lang="", mode="notes",
             ))
-
-            log.info("Started bot %s for %s → %s (user=%s)", bot_id, source_lang, target_lang, user_id[:8])
+            log.info("Started notes bot %s (user=%s)", bot_id, user_id[:8])
         except Exception as e:
-            log.exception("Failed to create bot for %s", target_lang)
-            await ws.send(json.dumps({"type": "error", "message": f"Failed to create bot for {lang_upper}: {e}"}))
+            log.exception("Failed to create notes bot")
+            await ws.send(json.dumps({"type": "error", "message": f"Failed to start notes bot: {e}"}))
+    else:
+        # Translation mode
+        source_lang = msg.get("source_lang", "en")
+        target_langs = msg.get("target_langs", [])
+        if not target_langs:
+            await ws.send(json.dumps({"type": "error", "message": "Select at least one target language"}))
+            return
+
+        for target_lang in target_langs:
+            lang_upper = target_lang.upper()
+            bot_name = f"Translator ({lang_upper})"
+            try:
+                bot_id = await create_bot(meeting_url, config.PUBLIC_WSS_URL, bot_name=bot_name)
+                session = BotSession(
+                    bot_id=bot_id,
+                    meeting_url=meeting_url,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    user_id=user_id,
+                    status="in_call",
+                )
+                bot_sessions[bot_id] = session
+                _init_recording(session)
+                asyncio.create_task(supabase_client.create_session(
+                    user_id=user_id, bot_id=bot_id, meeting_url=meeting_url,
+                    source_lang=source_lang, target_lang=target_lang,
+                ))
+                log.info("Started bot %s for %s → %s (user=%s)", bot_id, source_lang, target_lang, user_id[:8])
+            except Exception as e:
+                log.exception("Failed to create bot for %s", target_lang)
+                await ws.send(json.dumps({"type": "error", "message": f"Failed to create bot for {lang_upper}: {e}"}))
 
     await broadcast_status()
 
@@ -899,29 +1052,38 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
     session.status = "stopped"
     await broadcast_status()
 
+    # Upload transcript to Supabase Storage
+    if session.transcript_buffer:
+        asyncio.create_task(supabase_client.upload_text_file(
+            session.user_id, bot_id, "transcript.jsonl", session.transcript_buffer
+        ))
+
+    # Notes mode: generate summary before calculating costs (adds GPT-4o tokens)
+    if session.mode == "notes" and session.transcript_buffer:
+        await _generate_meeting_summary(session)
+
     # Calculate API costs
     meeting_minutes = (time.time() - session.recording_start) / 60.0 if session.recording_start else 0
     costs = _calculate_costs(session, meeting_minutes)
     log.info(
         "Session costs for %s: Recall=$%.2f, Deepgram=$%.2f (%d min × %d streams), "
-        "DeepL=$%.2f (%d chars), TTS=$%.2f (%d chars), total=$%.2f",
+        "DeepL=$%.2f (%d chars), TTS=$%.2f (%d chars), GPT-4o=$%.4f, total=$%.2f",
         bot_id[:8], costs["recall"],
         costs["deepgram"], round(meeting_minutes), session.deepgram_participants,
         costs["deepl"], session.deepl_chars,
         costs["tts"], session.tts_chars,
+        costs["gpt4o"],
         costs["total"],
     )
 
-    # Upload final SRT and transcript to Supabase Storage
-    duration = session.audio_offset
+    # Upload final SRT (translate mode only)
     if session.srt_buffer:
         asyncio.create_task(supabase_client.upload_text_file(
             session.user_id, bot_id, "subtitles.srt", session.srt_buffer
         ))
-    if session.transcript_buffer:
-        asyncio.create_task(supabase_client.upload_text_file(
-            session.user_id, bot_id, "transcript.jsonl", session.transcript_buffer
-        ))
+
+    # For notes mode, use wall-clock duration; for translate, use audio offset
+    duration = meeting_minutes * 60 if session.mode == "notes" else session.audio_offset
 
     # Update DB status (including cost breakdown)
     asyncio.create_task(supabase_client.update_session_status(
@@ -982,6 +1144,69 @@ async def _handle_delete_user(ws: ServerConnection, msg: dict, user_id: str, adm
     except Exception as e:
         log.exception("Failed to delete user %s", target_id)
         await ws.send(json.dumps({"type": "error", "message": f"Failed to delete user: {e}"}))
+
+
+async def _handle_ask(ws: ServerConnection, msg: dict, user_id: str, admin: bool) -> None:
+    """Handle Q&A about a meeting transcript."""
+    bot_id = (msg.get("bot_id") or "").strip()
+    question = (msg.get("question") or "").strip()
+    if not bot_id or not question:
+        await ws.send(json.dumps({"type": "error", "message": "Missing bot_id or question"}))
+        return
+
+    # Verify access
+    session_data = await supabase_client.get_session(bot_id)
+    if not session_data:
+        await ws.send(json.dumps({"type": "error", "message": "Session not found"}))
+        return
+    if session_data.get("user_id") != user_id and not admin:
+        await ws.send(json.dumps({"type": "error", "message": "Not authorized"}))
+        return
+
+    # Load transcript
+    try:
+        owner_id = session_data.get("user_id", "")
+        signed_url = await supabase_client.get_signed_url(
+            f"{owner_id}/{bot_id}/transcript.jsonl"
+        )
+        transcript_text = ""
+        if signed_url:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(signed_url)
+                if resp.status_code == 200:
+                    lines = []
+                    for line in resp.text.strip().split("\n"):
+                        if not line:
+                            continue
+                        entry = json.loads(line)
+                        speaker = entry.get("speaker", entry.get("participant_id", "Unknown"))
+                        text = entry.get("text", entry.get("original", ""))
+                        elapsed = entry.get("elapsed", 0)
+                        mins, secs = divmod(int(elapsed), 60)
+                        lines.append(f"[{mins:02d}:{secs:02d}] {speaker}: {text}")
+                    transcript_text = "\n".join(lines)
+
+        if not transcript_text:
+            await ws.send(json.dumps({"type": "answer", "bot_id": bot_id, "answer": "No transcript available."}))
+            return
+
+        resp = await _openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": (
+                    "You are a helpful assistant that answers questions about a meeting. "
+                    "Here is the meeting transcript:\n\n" + transcript_text + "\n\n"
+                    "Answer the user's question based on the transcript. Be concise and specific. "
+                    "If the answer isn't in the transcript, say so."
+                )},
+                {"role": "user", "content": question},
+            ],
+        )
+        answer = resp.choices[0].message.content
+        await ws.send(json.dumps({"type": "answer", "bot_id": bot_id, "answer": answer}))
+    except Exception as e:
+        log.exception("Failed to answer question for %s", bot_id)
+        await ws.send(json.dumps({"type": "error", "message": f"Failed to get answer: {e}"}))
 
 
 # ── Listener WebSocket handler (/listen) ──────────────────────────────
@@ -1103,6 +1328,21 @@ def make_on_utterance(session: BotSession):
     return on_utterance
 
 
+def make_on_utterance_notes(session: BotSession):
+    """Create an utterance callback for notes mode (transcribe only, no translation/TTS)."""
+    async def on_utterance(participant_id: str, text: str) -> None:
+        speaker = session.participant_names.get(participant_id, participant_id[:8])
+        elapsed = time.time() - session.recording_start if session.recording_start else 0
+        entry = {
+            "elapsed": round(elapsed, 2),
+            "speaker": speaker,
+            "text": text,
+        }
+        session.transcript_buffer += json.dumps(entry, ensure_ascii=False) + "\n"
+
+    return on_utterance
+
+
 # ── Recall.ai audio handler (default path) ────────────────────────────
 
 async def recall_handler(ws: ServerConnection) -> None:
@@ -1156,7 +1396,7 @@ async def recall_handler(ws: ServerConnection) -> None:
                 participant_name = participant.get("name", "")
 
                 # Skip bot's own audio to avoid feedback loops
-                if participant_name.startswith("Translator"):
+                if participant_name.startswith("Translator") or participant_name == "Meeting Notes":
                     continue
 
                 audio_b64 = inner.get("buffer", "")
@@ -1165,9 +1405,16 @@ async def recall_handler(ws: ServerConnection) -> None:
 
                 pcm_bytes = base64.b64decode(audio_b64)
 
+                # Store participant name for speaker labels
+                if participant_id not in session.participant_names and participant_name:
+                    session.participant_names[participant_id] = participant_name
+
                 # Get or create ASR stream for this participant in this session
                 if participant_id not in session.asr_streams:
-                    on_utterance = make_on_utterance(session)
+                    if session.mode == "notes":
+                        on_utterance = make_on_utterance_notes(session)
+                    else:
+                        on_utterance = make_on_utterance(session)
                     stream = ASRStream(participant_id, on_utterance, source_lang=session.source_lang)
                     await stream.start()
                     session.asr_streams[participant_id] = stream

@@ -154,25 +154,44 @@ HTML_PAGE = """\
   <div id="errors"></div>
 
   <div class="card">
+    <label>Mode</label>
+    <div class="checkboxes" style="margin-bottom:12px;">
+      <label><input type="radio" name="bot-mode" value="translate" checked> Translation</label>
+      <label><input type="radio" name="bot-mode" value="notes"> Meeting Notes</label>
+    </div>
+
     <label for="meeting-url">Zoom Meeting Link</label>
     <input type="text" id="meeting-url" placeholder="https://zoom.us/j/123456789?pwd=...">
 
-    <label for="source-lang">Source Language</label>
-    <select id="source-lang">
-      <option value="en">English</option>
-      <option value="de">German</option>
-      <option value="es">Spanish</option>
-      <option value="fr">French</option>
-      <option value="pt">Portuguese</option>
-    </select>
+    <div id="translate-options">
+      <label for="source-lang">Source Language</label>
+      <select id="source-lang">
+        <option value="en">English</option>
+        <option value="de">German</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+        <option value="pt">Portuguese</option>
+      </select>
 
-    <label>Target Languages</label>
-    <div class="checkboxes">
-      <label><input type="checkbox" name="target" value="es"> Spanish</label>
-      <label><input type="checkbox" name="target" value="pt"> Portuguese</label>
-      <label><input type="checkbox" name="target" value="en"> English</label>
-      <label><input type="checkbox" name="target" value="de"> German</label>
-      <label><input type="checkbox" name="target" value="fr"> French</label>
+      <label>Target Languages</label>
+      <div class="checkboxes">
+        <label><input type="checkbox" name="target" value="es"> Spanish</label>
+        <label><input type="checkbox" name="target" value="pt"> Portuguese</label>
+        <label><input type="checkbox" name="target" value="en"> English</label>
+        <label><input type="checkbox" name="target" value="de"> German</label>
+        <label><input type="checkbox" name="target" value="fr"> French</label>
+      </div>
+    </div>
+
+    <div id="notes-options" style="display:none;">
+      <label for="notes-lang">Meeting Language</label>
+      <select id="notes-lang">
+        <option value="en">English</option>
+        <option value="de">German</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+        <option value="pt">Portuguese</option>
+      </select>
     </div>
 
     <button class="primary" id="start-btn" disabled>Start Translation</button>
@@ -299,6 +318,26 @@ HTML_PAGE = """\
   var recList   = document.getElementById("rec-list");
   var connEl    = document.getElementById("conn-status");
   var errorsEl  = document.getElementById("errors");
+  var translateOpts = document.getElementById("translate-options");
+  var notesOpts = document.getElementById("notes-options");
+  var notesLang = document.getElementById("notes-lang");
+
+  // Mode toggle
+  var modeRadios = document.querySelectorAll('input[name="bot-mode"]');
+  function getMode() {
+    for (var i = 0; i < modeRadios.length; i++) {
+      if (modeRadios[i].checked) return modeRadios[i].value;
+    }
+    return "translate";
+  }
+  modeRadios.forEach(function(r) {
+    r.addEventListener("change", function() {
+      var m = getMode();
+      translateOpts.style.display = m === "translate" ? "" : "none";
+      notesOpts.style.display = m === "notes" ? "" : "none";
+      startBtn.textContent = m === "notes" ? "Start Meeting Notes" : "Start Translation";
+    });
+  });
 
   var isAdmin = false;
   var adminSection = document.getElementById("admin-section");
@@ -385,9 +424,10 @@ HTML_PAGE = """\
       var b = bots[i];
       var shortId = b.bot_id.substring(0, 8);
       var ownerHtml = (isAdmin && b.user_id) ? ' <span style="color:#e74c3c;font-size:.75rem;">user:' + b.user_id.substring(0,8) + '</span>' : '';
-      var url = listenUrl(b.target_lang);
+      var isNotes = b.mode === "notes";
+      var url = isNotes ? "" : listenUrl(b.target_lang);
       var dlHtml = "";
-      if (b.clip_count > 0) {
+      if (b.clip_count > 0 && !isNotes) {
         dlHtml = '<div class="dl-links">' +
           '<a href="#" data-mp3-bot="' + b.bot_id + '" onclick="downloadMp3(\\x27' + b.bot_id + '\\x27);return false;">Audio MP3</a>' +
           '<a href="#" onclick="downloadFile(\\x27' + b.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
@@ -396,17 +436,19 @@ HTML_PAGE = """\
           '(' + b.clip_count + ' clips)' +
         '</div>';
       }
+      var modeLabel = isNotes ? '<strong>MEETING NOTES</strong>' :
+        '<strong>' + b.source_lang.toUpperCase() + ' &rarr; ' + b.target_lang.toUpperCase() + '</strong>';
       html += '<div class="bot-row">' +
         '<div class="bot-info">' +
           '<span class="status-dot ' + b.status + '"></span>' +
-          '<strong>' + b.source_lang.toUpperCase() + ' &rarr; ' + b.target_lang.toUpperCase() + '</strong> ' +
+          modeLabel + ' ' +
           '<span class="bot-id">' + shortId + '</span> ' + ownerHtml +
           '<span>' + b.status + '</span>' +
-          '<div class="listen-url">' + url + '</div>' +
+          (url ? '<div class="listen-url">' + url + '</div>' : '') +
           dlHtml +
         '</div>' +
         '<div>' +
-          '<button class="copy-link" data-url="' + url + '">Copy Link</button>' +
+          (url ? '<button class="copy-link" data-url="' + url + '">Copy Link</button>' : '') +
           '<button class="stop" data-id="' + b.bot_id + '">Stop</button>' +
         '</div>' +
       '</div>';
@@ -437,18 +479,28 @@ HTML_PAGE = """\
   startBtn.addEventListener("click", function() {
     var meetingUrl = urlInput.value.trim();
     if (!meetingUrl) { showError("Enter a Zoom meeting link"); return; }
+    var m = getMode();
 
-    var checks = document.querySelectorAll('input[name="target"]:checked');
-    var targets = [];
-    for (var i = 0; i < checks.length; i++) targets.push(checks[i].value);
-    if (targets.length === 0) { showError("Select at least one target language"); return; }
-
-    ws.send(JSON.stringify({
-      action: "start",
-      meeting_url: meetingUrl,
-      source_lang: sourceSel.value,
-      target_langs: targets
-    }));
+    if (m === "notes") {
+      ws.send(JSON.stringify({
+        action: "start",
+        mode: "notes",
+        meeting_url: meetingUrl,
+        source_lang: notesLang.value
+      }));
+    } else {
+      var checks = document.querySelectorAll('input[name="target"]:checked');
+      var targets = [];
+      for (var i = 0; i < checks.length; i++) targets.push(checks[i].value);
+      if (targets.length === 0) { showError("Select at least one target language"); return; }
+      ws.send(JSON.stringify({
+        action: "start",
+        mode: "translate",
+        meeting_url: meetingUrl,
+        source_lang: sourceSel.value,
+        target_langs: targets
+      }));
+    }
   });
 
   function formatDuration(sec) {
@@ -469,24 +521,34 @@ HTML_PAGE = """\
       for (var i = 0; i < recs.length; i++) {
         var r = recs[i];
         var shortId = r.bot_id.substring(0, 8);
-        var info = r.clips + " clips";
-        if (r.duration) info += " &middot; " + formatDuration(r.duration);
+        var isNotes = r.mode === "notes";
+        var info = isNotes ? "" : r.clips + " clips";
+        if (r.duration) info += (info ? " &middot; " : "") + formatDuration(r.duration);
         var costHtml = "";
         if (r.api_cost != null && r.duration) {
           var revenue = (r.duration / 60) * 0.50;
           costHtml = ' &middot; <span style="color:#27ae60">cost $' + r.api_cost.toFixed(2) + '</span>' +
             ' &middot; <span style="color:#2980b9">revenue $' + revenue.toFixed(2) + '</span>';
         }
+        var linksHtml;
+        if (isNotes) {
+          linksHtml = '<div class="dl-links">' +
+            '<a href="/meeting/' + r.bot_id + '" target="_blank">View Meeting Notes</a>' +
+          '</div>';
+        } else {
+          linksHtml = '<div class="dl-links">' +
+            '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
+            '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
+            '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
+            '<a href="#" data-video-bot="' + r.bot_id + '" onclick="downloadVideo(\\x27' + r.bot_id + '\\x27);return false;">Dubbed Video</a>' +
+          '</div>';
+        }
+        var label = isNotes ? "NOTES" : shortId;
         html += '<div class="bot-row">' +
           '<div class="bot-info">' +
-            '<strong>' + shortId + '</strong> ' +
+            '<strong>' + label + '</strong> ' +
             '<span style="color:#888">' + info + costHtml + '</span>' +
-            '<div class="dl-links">' +
-              '<a href="#" data-mp3-bot="' + r.bot_id + '" onclick="downloadMp3(\\x27' + r.bot_id + '\\x27);return false;">Audio MP3</a>' +
-              '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27subtitles.srt\\x27);return false;">Subtitles SRT</a>' +
-              '<a href="#" onclick="downloadFile(\\x27' + r.bot_id + '\\x27,\\x27transcript.jsonl\\x27);return false;">Transcript</a>' +
-              '<a href="#" data-video-bot="' + r.bot_id + '" onclick="downloadVideo(\\x27' + r.bot_id + '\\x27);return false;">Dubbed Video</a>' +
-            '</div>' +
+            linksHtml +
           '</div>' +
         '</div>';
       }
@@ -995,6 +1057,291 @@ LISTEN_PAGE = """\
     liveArea.classList.remove("hidden");
     connect();
   });
+})();
+</script>
+</body>
+</html>
+"""
+
+
+MEETING_PAGE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Notes</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; }
+  .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .meta { color: #888; font-size: .85rem; margin-bottom: 20px; }
+  .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .section h2 { font-size: 1.1rem; margin-bottom: 12px; color: #58a6ff; }
+  .summary-content { line-height: 1.6; }
+  .summary-content h1, .summary-content h2, .summary-content h3 { color: #e6edf3; margin-top: 16px; margin-bottom: 8px; }
+  .summary-content h1 { font-size: 1.2rem; }
+  .summary-content h2 { font-size: 1.05rem; }
+  .summary-content h3 { font-size: .95rem; }
+  .summary-content ul, .summary-content ol { padding-left: 20px; margin: 8px 0; }
+  .summary-content li { margin-bottom: 4px; }
+  .summary-content strong { color: #f0f6fc; }
+  .summary-content p { margin-bottom: 8px; }
+  .search-box { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: .9rem; margin-bottom: 12px; }
+  .search-box:focus { outline: none; border-color: #58a6ff; }
+  .transcript { max-height: 500px; overflow-y: auto; }
+  .utterance { padding: 6px 0; border-bottom: 1px solid #21262d; font-size: .85rem; line-height: 1.5; }
+  .utterance .time { color: #888; font-family: monospace; margin-right: 8px; }
+  .utterance .speaker { color: #58a6ff; font-weight: 600; margin-right: 6px; }
+  .chat-box { display: flex; gap: 8px; }
+  .chat-input { flex: 1; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: .9rem; }
+  .chat-input:focus { outline: none; border-color: #58a6ff; }
+  .chat-send { padding: 10px 20px; background: #238636; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: .9rem; }
+  .chat-send:hover { background: #2ea043; }
+  .chat-send:disabled { opacity: .5; cursor: default; }
+  .chat-messages { margin-bottom: 12px; max-height: 300px; overflow-y: auto; }
+  .chat-msg { padding: 8px 12px; margin-bottom: 8px; border-radius: 6px; font-size: .85rem; line-height: 1.5; }
+  .chat-msg.user { background: #1f3a5f; text-align: right; }
+  .chat-msg.assistant { background: #1c2333; }
+  .chat-msg.assistant p { margin-bottom: 6px; }
+  .chat-msg.assistant ul, .chat-msg.assistant ol { padding-left: 20px; margin: 6px 0; }
+  .loading { color: #888; font-style: italic; }
+  #login-screen { max-width: 360px; margin: 80px auto; }
+  #login-screen h1 { text-align: center; margin-bottom: 16px; }
+  .auth-field { margin-bottom: 12px; }
+  .auth-field label { display: block; margin-bottom: 4px; color: #888; font-size: .85rem; }
+  .auth-field input { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; }
+  .auth-btn { width: 100%; padding: 10px; background: #238636; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: .9rem; }
+  .auth-error { color: #f85149; font-size: .85rem; margin-top: 8px; display: none; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div id="login-screen" style="display:none;">
+  <h1>Sign In</h1>
+  <div class="auth-field">
+    <label>Email</label>
+    <input type="email" id="auth-email" placeholder="Email">
+  </div>
+  <div class="auth-field">
+    <label>Password</label>
+    <input type="password" id="auth-password" placeholder="Password">
+  </div>
+  <button class="auth-btn" id="signin-btn">Sign In</button>
+  <div class="auth-error" id="auth-error"></div>
+</div>
+
+<div id="main-app" style="display:none;">
+<div class="container">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+    <h1>Meeting Notes</h1>
+    <a href="/">&larr; Back to Dashboard</a>
+  </div>
+  <div class="meta" id="meeting-meta"></div>
+
+  <div class="section" id="summary-section">
+    <h2>Summary</h2>
+    <div class="summary-content" id="summary-content"><span class="loading">Loading...</span></div>
+  </div>
+
+  <div class="section">
+    <h2>Transcript</h2>
+    <input type="text" class="search-box" id="transcript-search" placeholder="Search transcript...">
+    <div class="transcript" id="transcript-content"><span class="loading">Loading...</span></div>
+  </div>
+
+  <div class="section">
+    <h2>Ask a Question</h2>
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-box">
+      <input type="text" class="chat-input" id="chat-input" placeholder="Ask about this meeting...">
+      <button class="chat-send" id="chat-send" disabled>Ask</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+(function() {
+  var sbUrl = "__SUPABASE_URL__";
+  var sbKey = "__SUPABASE_ANON_KEY__";
+  var botId = "__BOT_ID__";
+
+  if (typeof supabase === "undefined") {
+    document.getElementById("auth-error").textContent = "Supabase JS failed to load";
+    document.getElementById("auth-error").style.display = "block";
+    return;
+  }
+  var sb = supabase.createClient(sbUrl, sbKey);
+  var accessToken = null;
+  var ws = null;
+  var transcriptData = [];
+
+  var loginScreen = document.getElementById("login-screen");
+  var mainApp = document.getElementById("main-app");
+  var authError = document.getElementById("auth-error");
+  var signinBtn = document.getElementById("signin-btn");
+  var summaryContent = document.getElementById("summary-content");
+  var transcriptContent = document.getElementById("transcript-content");
+  var searchBox = document.getElementById("transcript-search");
+  var chatMessages = document.getElementById("chat-messages");
+  var chatInput = document.getElementById("chat-input");
+  var chatSend = document.getElementById("chat-send");
+  var meetingMeta = document.getElementById("meeting-meta");
+
+  function showLogin() {
+    loginScreen.style.display = "";
+    mainApp.style.display = "none";
+  }
+  function showApp() {
+    loginScreen.style.display = "none";
+    mainApp.style.display = "block";
+    loadMeeting();
+    connectWs();
+  }
+
+  sb.auth.onAuthStateChange(function(event, session) {
+    if (session && session.access_token) {
+      accessToken = session.access_token;
+      showApp();
+    } else {
+      accessToken = null;
+      showLogin();
+    }
+  });
+
+  signinBtn.addEventListener("click", function() {
+    var email = document.getElementById("auth-email").value.trim();
+    var pass = document.getElementById("auth-password").value;
+    if (!email || !pass) { authError.textContent = "Enter email and password"; authError.style.display = "block"; return; }
+    sb.auth.signInWithPassword({email: email, password: pass}).then(function(res) {
+      if (res.error) { authError.textContent = res.error.message; authError.style.display = "block"; }
+    });
+  });
+
+  document.getElementById("auth-password").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") signinBtn.click();
+  });
+
+  function connectWs() {
+    if (ws) return;
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var url = proto + "//" + location.host + "/mgmt?token=" + accessToken;
+    ws = new WebSocket(url);
+    ws.onmessage = function(e) {
+      var msg = JSON.parse(e.data);
+      if (msg.type === "answer") {
+        if (msg.bot_id === botId) {
+          addChatMessage("assistant", msg.answer);
+          chatSend.disabled = false;
+          chatSend.textContent = "Ask";
+        }
+      } else if (msg.type === "error") {
+        addChatMessage("assistant", "Error: " + msg.message);
+        chatSend.disabled = false;
+        chatSend.textContent = "Ask";
+      }
+    };
+    ws.onclose = function() { ws = null; setTimeout(connectWs, 3000); };
+  }
+
+  function loadMeeting() {
+    fetch("/api/meeting/" + botId, { headers: { "Authorization": "Bearer " + accessToken } })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var date = data.created_at ? new Date(data.created_at).toLocaleString() : "";
+        var dur = data.duration ? Math.round(data.duration / 60) + " min" : "";
+        meetingMeta.textContent = [date, dur].filter(Boolean).join(" \\xb7 ");
+
+        if (data.summary) {
+          if (typeof marked !== "undefined") {
+            summaryContent.innerHTML = marked.parse(data.summary);
+          } else {
+            summaryContent.textContent = data.summary;
+          }
+        } else {
+          summaryContent.innerHTML = '<span class="loading">No summary available yet.</span>';
+        }
+
+        transcriptData = data.transcript || [];
+        renderTranscript(transcriptData);
+      })
+      .catch(function() {
+        summaryContent.innerHTML = '<span class="loading">Failed to load meeting data.</span>';
+      });
+  }
+
+  function renderTranscript(items) {
+    if (!items || items.length === 0) {
+      transcriptContent.innerHTML = '<span class="loading">No transcript available.</span>';
+      return;
+    }
+    var html = "";
+    for (var i = 0; i < items.length; i++) {
+      var t = items[i];
+      var elapsed = t.elapsed || 0;
+      var mins = Math.floor(elapsed / 60);
+      var secs = Math.floor(elapsed % 60);
+      var ts = (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
+      var speaker = t.speaker || t.participant_id || "Unknown";
+      var text = t.text || t.original || "";
+      html += '<div class="utterance">' +
+        '<span class="time">' + ts + '</span>' +
+        '<span class="speaker">' + speaker + ':</span>' +
+        '<span>' + text + '</span>' +
+      '</div>';
+    }
+    transcriptContent.innerHTML = html;
+  }
+
+  searchBox.addEventListener("input", function() {
+    var q = searchBox.value.trim().toLowerCase();
+    if (!q) { renderTranscript(transcriptData); return; }
+    var filtered = transcriptData.filter(function(t) {
+      var text = (t.text || t.original || "").toLowerCase();
+      var speaker = (t.speaker || "").toLowerCase();
+      return text.indexOf(q) !== -1 || speaker.indexOf(q) !== -1;
+    });
+    renderTranscript(filtered);
+  });
+
+  chatSend.addEventListener("click", function() {
+    var q = chatInput.value.trim();
+    if (!q || !ws || ws.readyState !== 1) return;
+    addChatMessage("user", q);
+    chatInput.value = "";
+    chatSend.disabled = true;
+    chatSend.textContent = "Thinking...";
+    ws.send(JSON.stringify({ action: "ask", bot_id: botId, question: q }));
+  });
+
+  chatInput.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") chatSend.click();
+  });
+
+  var enableCheck = setInterval(function() {
+    if (ws && ws.readyState === 1) {
+      chatSend.disabled = false;
+      clearInterval(enableCheck);
+    }
+  }, 200);
+
+  function addChatMessage(role, text) {
+    var div = document.createElement("div");
+    div.className = "chat-msg " + role;
+    if (role === "assistant" && typeof marked !== "undefined") {
+      div.innerHTML = marked.parse(text);
+    } else {
+      div.textContent = text;
+    }
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
 })();
 </script>
 </body>
