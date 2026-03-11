@@ -390,7 +390,7 @@ async def _build_dubbed_video(owner_id: str, bot_id: str) -> None:
                         async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
                             f.write(chunk)
 
-            # 4. Merge with ffmpeg: keep video, duck original audio, mix in translation
+            # 4. Merge with ffmpeg: re-encode video smaller, duck original audio, mix in translation
             log.info("Merging dubbed video for %s...", bot_id[:8])
             proc = await asyncio.to_thread(lambda: subprocess.run([
                 "ffmpeg", "-y",
@@ -399,9 +399,10 @@ async def _build_dubbed_video(owner_id: str, bot_id: str) -> None:
                 "-filter_complex",
                 "[0:a]volume=0.3[orig];[1:a]aresample=async=1[tts];[orig][tts]amix=inputs=2:duration=first[out]",
                 "-map", "0:v", "-map", "[out]",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                "-c:v", "libx264", "-crf", "28", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "128k",
                 output_path,
-            ], capture_output=True))
+            ], capture_output=True, timeout=600))
 
             if proc.returncode != 0:
                 log.error("ffmpeg dubbed video failed for %s: %s",

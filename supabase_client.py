@@ -166,16 +166,19 @@ async def upload_text_file(user_id: str, bot_id: str, filename: str, text: str) 
         log.exception("Failed to upload text file %s", path)
 
 
-async def upload_or_update_file(path: str, data: bytes, content_type: str) -> None:
+async def upload_or_update_file(path: str, data: bytes, content_type: str, timeout: float = 300) -> None:
     """Upload a file to storage, replacing it if it already exists.
 
     Raises on failure so callers know the upload didn't succeed.
     """
     log.info("Uploading %s (%.1f MB)", path, len(data) / 1_000_000)
-    await asyncio.to_thread(
-        lambda: _client.storage.from_(BUCKET).upload(
-            path, data, {"content-type": content_type, "upsert": "true"}
-        )
+    await asyncio.wait_for(
+        asyncio.to_thread(
+            lambda: _client.storage.from_(BUCKET).upload(
+                path, data, {"content-type": content_type, "upsert": "true"}
+            )
+        ),
+        timeout=timeout,
     )
 
 

@@ -664,7 +664,10 @@ HTML_PAGE = """\
       linkEl.onclick = function(e) { e.preventDefault(); };
     }
 
+    var attempts = 0;
+    var maxAttempts = 60;
     function poll() {
+      attempts++;
       fetch("/api/recordings/" + botId + "/audio", {headers: authHeaders(), redirect: "follow"})
         .then(function(r) {
           if (r.redirected) {
@@ -674,14 +677,18 @@ HTML_PAGE = """\
             return;
           }
           if (r.status === 202) {
+            if (attempts >= maxAttempts) {
+              throw new Error("Timed out waiting for audio build");
+            }
             setTimeout(poll, 5000);
             return;
           }
           throw new Error("Server error " + r.status);
         })
-        .catch(function() {
+        .catch(function(err) {
           delete mp3Building[botId];
-          showError("Failed to build audio for " + shortId);
+          showError("Failed to build audio for " + shortId + (err.message.includes("Timed out") ? " (timed out)" : ""));
+          applyMp3State();
         });
     }
     poll();
@@ -726,7 +733,10 @@ HTML_PAGE = """\
       linkEl.onclick = function(e) { e.preventDefault(); };
     }
 
+    var attempts = 0;
+    var maxAttempts = 60;
     function poll() {
+      attempts++;
       fetch("/api/recordings/" + botId + "/video", {headers: authHeaders(), redirect: "follow"})
         .then(function(r) {
           if (r.redirected) {
@@ -736,14 +746,18 @@ HTML_PAGE = """\
             return;
           }
           if (r.status === 202) {
+            if (attempts >= maxAttempts) {
+              throw new Error("Timed out waiting for video build");
+            }
             setTimeout(poll, 10000);
             return;
           }
           throw new Error("Server error " + r.status);
         })
-        .catch(function() {
+        .catch(function(err) {
           delete videoBuilding[botId];
-          showError("Failed to build video for " + shortId);
+          showError("Failed to build video for " + shortId + (err.message.includes("Timed out") ? " (timed out)" : ""));
+          applyVideoState();
         });
     }
     poll();
