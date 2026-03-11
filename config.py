@@ -10,6 +10,7 @@ RECALL_API_KEY = os.environ["RECALL_API_KEY"]
 DEEPGRAM_API_KEY = os.environ["DEEPGRAM_API_KEY"]
 DEEPL_API_KEY = os.environ["DEEPL_API_KEY"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Server
 WEBSOCKET_HOST = os.getenv("WEBSOCKET_HOST", "0.0.0.0")

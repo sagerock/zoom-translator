@@ -26,7 +26,7 @@ import websockets
 from websockets.asyncio.server import serve, ServerConnection
 from websockets.http11 import Request, Response
 
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
 
 import config
 import supabase_client
@@ -35,7 +35,7 @@ from pipeline.translator import translate
 from pipeline.tts import synthesize
 from recall_client import create_bot, stop_bot
 
-_openai = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+_anthropic = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 from web_ui import HTML_PAGE, LISTEN_PAGE, MEETING_PAGE
 
 logging.basicConfig(
@@ -68,8 +68,8 @@ class BotSession:
     tts_chars: int = 0          # total characters sent to OpenAI TTS
     deepl_chars: int = 0        # total characters sent to DeepL
     deepgram_participants: int = 0  # peak concurrent ASR streams
-    gpt4o_input_tokens: int = 0
-    gpt4o_output_tokens: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
 
 
 # bot_id → BotSession
@@ -96,9 +96,9 @@ DEEPGRAM_PER_MIN = 0.0059
 DEEPL_PER_CHAR = 0.0  # paid plan: $25/1M chars = 0.000025
 # OpenAI TTS-1: $15/1M chars
 TTS_PER_CHAR = 0.000015
-# OpenAI GPT-4o: $2.50/1M input tokens, $10/1M output tokens
-GPT4O_INPUT_PER_TOKEN = 0.0000025
-GPT4O_OUTPUT_PER_TOKEN = 0.00001
+# Claude Sonnet 4.6: $3/1M input tokens, $15/1M output tokens
+SONNET_INPUT_PER_TOKEN = 0.000003
+SONNET_OUTPUT_PER_TOKEN = 0.000015
 
 
 def _calculate_costs(session: BotSession, meeting_minutes: float) -> dict[str, float]:
@@ -107,10 +107,10 @@ def _calculate_costs(session: BotSession, meeting_minutes: float) -> dict[str, f
     deepgram = meeting_minutes * max(session.deepgram_participants, 1) * DEEPGRAM_PER_MIN
     deepl = session.deepl_chars * DEEPL_PER_CHAR
     tts = session.tts_chars * TTS_PER_CHAR
-    gpt4o = (session.gpt4o_input_tokens * GPT4O_INPUT_PER_TOKEN
-             + session.gpt4o_output_tokens * GPT4O_OUTPUT_PER_TOKEN)
-    total = recall + deepgram + deepl + tts + gpt4o
-    return {"recall": recall, "deepgram": deepgram, "deepl": deepl, "tts": tts, "gpt4o": gpt4o, "total": total}
+    sonnet = (session.llm_input_tokens * SONNET_INPUT_PER_TOKEN
+              + session.llm_output_tokens * SONNET_OUTPUT_PER_TOKEN)
+    total = recall + deepgram + deepl + tts + sonnet
+    return {"recall": recall, "deepgram": deepgram, "deepl": deepl, "tts": tts, "sonnet": sonnet, "total": total}
 
 
 async def _generate_meeting_summary(session: BotSession) -> None:
@@ -133,26 +133,27 @@ async def _generate_meeting_summary(session: BotSession) -> None:
 
         transcript_text = "\n".join(lines)
 
-        resp = await _openai.chat.completions.create(
-            model="gpt-4o",
+        resp = await _anthropic.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=(
+                "You are a meeting notes assistant. Summarize the following meeting transcript. "
+                "Include:\n"
+                "1. **Summary** — A concise overview of what was discussed\n"
+                "2. **Key Discussion Points** — The main topics covered\n"
+                "3. **Decisions Made** — Any decisions that were reached\n"
+                "4. **Action Items** — Tasks assigned, with owners if mentioned\n"
+                "5. **Follow-ups** — Anything that needs further discussion\n\n"
+                "Use markdown formatting. Be concise but thorough."
+            ),
             messages=[
-                {"role": "system", "content": (
-                    "You are a meeting notes assistant. Summarize the following meeting transcript. "
-                    "Include:\n"
-                    "1. **Summary** — A concise overview of what was discussed\n"
-                    "2. **Key Discussion Points** — The main topics covered\n"
-                    "3. **Decisions Made** — Any decisions that were reached\n"
-                    "4. **Action Items** — Tasks assigned, with owners if mentioned\n"
-                    "5. **Follow-ups** — Anything that needs further discussion\n\n"
-                    "Use markdown formatting. Be concise but thorough."
-                )},
                 {"role": "user", "content": transcript_text},
             ],
         )
 
-        summary = resp.choices[0].message.content
-        session.gpt4o_input_tokens += resp.usage.prompt_tokens
-        session.gpt4o_output_tokens += resp.usage.completion_tokens
+        summary = resp.content[0].text
+        session.llm_input_tokens += resp.usage.input_tokens
+        session.llm_output_tokens += resp.usage.output_tokens
 
         # Store summary in DB and Storage
         await supabase_client.update_session_summary(session.bot_id, summary)
@@ -1058,7 +1059,7 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
             session.user_id, bot_id, "transcript.jsonl", session.transcript_buffer
         ))
 
-    # Notes mode: generate summary before calculating costs (adds GPT-4o tokens)
+    # Notes mode: generate summary before calculating costs (adds Sonnet tokens)
     if session.mode == "notes" and session.transcript_buffer:
         await _generate_meeting_summary(session)
 
@@ -1067,12 +1068,12 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
     costs = _calculate_costs(session, meeting_minutes)
     log.info(
         "Session costs for %s: Recall=$%.2f, Deepgram=$%.2f (%d min × %d streams), "
-        "DeepL=$%.2f (%d chars), TTS=$%.2f (%d chars), GPT-4o=$%.4f, total=$%.2f",
+        "DeepL=$%.2f (%d chars), TTS=$%.2f (%d chars), Sonnet=$%.4f, total=$%.2f",
         bot_id[:8], costs["recall"],
         costs["deepgram"], round(meeting_minutes), session.deepgram_participants,
         costs["deepl"], session.deepl_chars,
         costs["tts"], session.tts_chars,
-        costs["gpt4o"],
+        costs["sonnet"],
         costs["total"],
     )
 
@@ -1190,19 +1191,20 @@ async def _handle_ask(ws: ServerConnection, msg: dict, user_id: str, admin: bool
             await ws.send(json.dumps({"type": "answer", "bot_id": bot_id, "answer": "No transcript available."}))
             return
 
-        resp = await _openai.chat.completions.create(
-            model="gpt-4o",
+        resp = await _anthropic.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=(
+                "You are a helpful assistant that answers questions about a meeting. "
+                "Here is the meeting transcript:\n\n" + transcript_text + "\n\n"
+                "Answer the user's question based on the transcript. Be concise and specific. "
+                "If the answer isn't in the transcript, say so."
+            ),
             messages=[
-                {"role": "system", "content": (
-                    "You are a helpful assistant that answers questions about a meeting. "
-                    "Here is the meeting transcript:\n\n" + transcript_text + "\n\n"
-                    "Answer the user's question based on the transcript. Be concise and specific. "
-                    "If the answer isn't in the transcript, say so."
-                )},
                 {"role": "user", "content": question},
             ],
         )
-        answer = resp.choices[0].message.content
+        answer = resp.content[0].text
         await ws.send(json.dumps({"type": "answer", "bot_id": bot_id, "answer": answer}))
     except Exception as e:
         log.exception("Failed to answer question for %s", bot_id)
