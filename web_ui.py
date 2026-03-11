@@ -526,6 +526,29 @@ HTML_PAGE = """\
       if (services.length > 0) {
         html += '<div style="margin-top:8px;font-size:.8rem;color:#888;">' + services.join(' &middot; ') + '</div>';
       }
+      // Per-user breakdown table
+      if (d.users && d.users.length > 0) {
+        html += '<table style="width:100%;margin-top:12px;font-size:.8rem;border-collapse:collapse;">';
+        html += '<tr style="border-bottom:1px solid #ddd;color:#888;">' +
+          '<th style="text-align:left;padding:4px;">User</th>' +
+          '<th style="text-align:right;padding:4px;">Sessions</th>' +
+          '<th style="text-align:right;padding:4px;">Minutes</th>' +
+          '<th style="text-align:right;padding:4px;">API Cost</th>' +
+          '<th style="text-align:right;padding:4px;">Revenue</th>' +
+          '<th style="text-align:right;padding:4px;">Margin</th></tr>';
+        for (var i = 0; i < d.users.length; i++) {
+          var u = d.users[i];
+          var uid = u.user_id ? u.user_id.substring(0, 8) : "?";
+          html += '<tr style="border-bottom:1px solid #f0f0f0;">' +
+            '<td style="padding:4px;font-family:monospace;">' + uid + '</td>' +
+            '<td style="text-align:right;padding:4px;">' + u.sessions + '</td>' +
+            '<td style="text-align:right;padding:4px;">' + u.minutes + '</td>' +
+            '<td style="text-align:right;padding:4px;color:#e74c3c;">$' + u.api_cost.toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:4px;color:#27ae60;">$' + u.revenue.toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:4px;color:#8e44ad;">$' + u.margin.toFixed(2) + '</td></tr>';
+        }
+        html += '</table>';
+      }
       dashboardEl.innerHTML = html;
     }).catch(function() {});
   }

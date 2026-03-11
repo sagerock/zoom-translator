@@ -403,6 +403,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         total_api_cost = 0.0
         total_sessions = 0
         total_clips = 0
+        per_user: dict[str, dict[str, Any]] = {}
         for s in sessions:
             clips = s.get("clip_count", 0)
             if clips > 0:
@@ -410,6 +411,23 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
                 total_clips += clips
                 total_duration += s.get("duration") or 0
                 total_api_cost += s.get("api_cost") or 0
+                uid = s.get("user_id", "unknown")
+                if uid not in per_user:
+                    per_user[uid] = {"sessions": 0, "clips": 0, "minutes": 0.0, "api_cost": 0.0}
+                per_user[uid]["sessions"] += 1
+                per_user[uid]["clips"] += clips
+                per_user[uid]["minutes"] += (s.get("duration") or 0) / 60.0
+                per_user[uid]["api_cost"] += s.get("api_cost") or 0
+        # Round per-user values and compute revenue/margin
+        users_list = []
+        for uid, u in per_user.items():
+            u["minutes"] = round(u["minutes"], 1)
+            u["api_cost"] = round(u["api_cost"], 2)
+            u["revenue"] = round(u["minutes"] * 0.50, 2)
+            u["margin"] = round(u["revenue"] - u["api_cost"], 2)
+            u["user_id"] = uid
+            users_list.append(u)
+        users_list.sort(key=lambda x: x["minutes"], reverse=True)
         total_minutes = total_duration / 60.0
         total_revenue = total_minutes * 0.50
         dashboard: dict[str, Any] = {
@@ -419,6 +437,7 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
             "total_api_cost": round(total_api_cost, 2),
             "total_revenue": round(total_revenue, 2),
             "margin": round(total_revenue - total_api_cost, 2),
+            "users": users_list,
         }
         # Fetch live Recall.ai usage from bot list
         try:
