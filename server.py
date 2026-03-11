@@ -76,6 +76,8 @@ listener_clients: dict[str, set[ServerConnection]] = {}
 _synced_builds: set[str] = set()
 
 # ── Cost rates ─────────────────────────────────────────────────────────
+# Recall.ai: $0.50/hr prorated to the second, billed per bot (not per participant)
+RECALL_PER_MIN = 0.50 / 60
 # Deepgram Nova-2: $0.0059/min (pay-as-you-go), billed per participant stream
 DEEPGRAM_PER_MIN = 0.0059
 # DeepL Free tier: $0 (500K chars/month limit). Set to paid rate when upgraded.
@@ -86,10 +88,12 @@ TTS_PER_CHAR = 0.000015
 
 def _calculate_costs(session: BotSession, meeting_minutes: float) -> dict[str, float]:
     """Calculate API costs for a session."""
+    recall = meeting_minutes * RECALL_PER_MIN
     deepgram = meeting_minutes * max(session.deepgram_participants, 1) * DEEPGRAM_PER_MIN
     deepl = session.deepl_chars * DEEPL_PER_CHAR
     tts = session.tts_chars * TTS_PER_CHAR
-    return {"deepgram": deepgram, "deepl": deepl, "tts": tts, "total": deepgram + deepl + tts}
+    total = recall + deepgram + deepl + tts
+    return {"recall": recall, "deepgram": deepgram, "deepl": deepl, "tts": tts, "total": total}
 
 
 # ── Auth helpers ───────────────────────────────────────────────────────
@@ -613,9 +617,10 @@ async def _handle_stop(ws: ServerConnection, msg: dict, user_id: str, admin: boo
     meeting_minutes = (time.time() - session.recording_start) / 60.0 if session.recording_start else 0
     costs = _calculate_costs(session, meeting_minutes)
     log.info(
-        "Session costs for %s: Deepgram=$%.2f (%d min × %d streams), "
+        "Session costs for %s: Recall=$%.2f, Deepgram=$%.2f (%d min × %d streams), "
         "DeepL=$%.2f (%d chars), TTS=$%.2f (%d chars), total=$%.2f",
-        bot_id[:8], costs["deepgram"], round(meeting_minutes), session.deepgram_participants,
+        bot_id[:8], costs["recall"],
+        costs["deepgram"], round(meeting_minutes), session.deepgram_participants,
         costs["deepl"], session.deepl_chars,
         costs["tts"], session.tts_chars,
         costs["total"],
