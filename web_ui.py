@@ -126,7 +126,7 @@ HTML_PAGE = """\
 <!-- Login Screen -->
 <div id="login-screen">
   <div class="container">
-    <h1>Zoom Translator</h1>
+    <h1>Meeting Translator</h1>
     <div class="card">
       <div class="auth-error" id="auth-error"></div>
       <label for="auth-email">Email</label>
@@ -144,7 +144,7 @@ HTML_PAGE = """\
 <div id="main-app">
 <div class="container">
   <div class="user-bar">
-    <h1>Zoom Translator</h1>
+    <h1>Meeting Translator</h1>
     <div>
       <span class="user-email" id="user-email"></span>
       <button class="logout" id="logout-btn">Log out</button>
@@ -160,8 +160,8 @@ HTML_PAGE = """\
       <label><input type="radio" name="bot-mode" value="notes"> Meeting Notes</label>
     </div>
 
-    <label for="meeting-url">Zoom Meeting Link</label>
-    <input type="text" id="meeting-url" placeholder="https://zoom.us/j/123456789?pwd=...">
+    <label for="meeting-url">Meeting Link</label>
+    <input type="text" id="meeting-url" placeholder="Zoom, Google Meet, or Teams link">
 
     <div id="translate-options">
       <label for="source-lang">Source Language</label>
