@@ -136,6 +136,10 @@ HTML_PAGE = """\
       <div class="auth-buttons">
         <button class="primary" id="signin-btn">Sign In</button>
       </div>
+      <div style="text-align:center;margin-top:12px;">
+        <a href="#" id="forgot-link" style="color:#58a6ff;font-size:.85rem;">Forgot password?</a>
+      </div>
+      <div class="auth-error" id="reset-msg" style="color:#27ae60;"></div>
     </div>
   </div>
 </div>
@@ -277,6 +281,15 @@ HTML_PAGE = """\
   // It fires INITIAL_SESSION on load, SIGNED_IN after login/signup,
   // TOKEN_REFRESHED on refresh, and SIGNED_OUT on logout.
   sb.auth.onAuthStateChange(function(event, session) {
+    if (event === "PASSWORD_RECOVERY") {
+      var newPass = prompt("Enter your new password:");
+      if (newPass) {
+        sb.auth.updateUser({ password: newPass }).then(function(res) {
+          if (res.error) { alert("Error: " + res.error.message); }
+          else { alert("Password updated successfully!"); }
+        });
+      }
+    }
     if (session && session.access_token) {
       var wasLoggedIn = !!accessToken;
       accessToken = session.access_token;
@@ -308,6 +321,20 @@ HTML_PAGE = """\
   // Allow Enter key to submit login
   authPass.addEventListener("keydown", function(e) {
     if (e.key === "Enter") signinBtn.click();
+  });
+
+  // Forgot password
+  document.getElementById("forgot-link").addEventListener("click", function(e) {
+    e.preventDefault();
+    var email = authEmail.value.trim();
+    if (!email) { showAuthError("Enter your email first"); return; }
+    var resetMsg = document.getElementById("reset-msg");
+    sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin }).then(function(res) {
+      if (res.error) { showAuthError(res.error.message); return; }
+      resetMsg.textContent = "Password reset email sent! Check your inbox.";
+      resetMsg.style.display = "block";
+      authError.style.display = "none";
+    });
   });
 
   // ── Management UI ──────────────────────────────────────────────────
