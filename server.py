@@ -673,14 +673,14 @@ async def process_request(connection: ServerConnection, request: Request) -> Res
         for uid, u in per_user.items():
             u["minutes"] = round(u["minutes"], 1)
             u["api_cost"] = round(u["api_cost"], 2)
-            u["revenue"] = round(u["minutes"] * 0.50, 2)
+            u["revenue"] = round(u["minutes"] * 0.10, 2)
             u["margin"] = round(u["revenue"] - u["api_cost"], 2)
             u["user_id"] = uid
             u["email"] = email_map.get(uid, uid[:8])
             users_list.append(u)
         users_list.sort(key=lambda x: x["minutes"], reverse=True)
         total_minutes = total_duration / 60.0
-        total_revenue = total_minutes * 0.50
+        total_revenue = total_minutes * 0.10
         dashboard: dict[str, Any] = {
             "total_sessions": total_sessions,
             "total_clips": total_clips,

@@ -1326,7 +1326,7 @@ HTML_PAGE = """\
         var info = r.clips + " clips";
         if (r.duration) info += " &middot; " + formatDuration(r.duration);
         if (r.api_cost != null && r.duration) {
-          var rev = (r.duration / 60) * 0.50;
+          var rev = (r.duration / 60) * 0.10;
           info += ' &middot; <span class="cost-green">cost $' + r.api_cost.toFixed(2) + '</span>';
           info += ' &middot; <span class="cost-blue">rev $' + rev.toFixed(2) + '</span>';
           info += ' &middot; <span class="cost-purple">margin $' + (rev - r.api_cost).toFixed(2) + '</span>';
