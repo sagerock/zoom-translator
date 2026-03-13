@@ -824,6 +824,12 @@ HTML_PAGE = """\
 
     <div class="card">
       <div class="card-title">Recordings</div>
+      <div id="usage-summary" style="display:none; margin-bottom:12px; padding:10px 14px; background:rgba(255,255,255,0.04); border-radius:8px; font-size:0.95em;">
+        <span id="usage-total-mins" style="color:var(--cream);"></span>
+        <span style="color:var(--muted);"> &middot; </span>
+        <span id="usage-total-cost" style="color:var(--sage-light); font-weight:600;"></span>
+        <span style="color:var(--muted); font-size:0.85em;"> @ $0.10/min</span>
+      </div>
       <div id="rec-list"><div class="empty">No recordings yet</div></div>
     </div>
 
@@ -1174,6 +1180,8 @@ HTML_PAGE = """\
         recList.innerHTML = '<div class="empty">No recordings yet</div>';
         return;
       }
+      var RATE_PER_MIN = 0.10;
+      var totalMins = 0;
       var html = "";
       for (var i = 0; i < recs.length; i++) {
         var r = recs[i];
@@ -1181,12 +1189,14 @@ HTML_PAGE = """\
         var isNotes = r.mode === "notes";
         var isBoth = r.mode === "both";
         var info = isNotes ? "" : r.clips + " clips";
-        if (r.duration) info += (info ? " &middot; " : "") + formatDuration(r.duration);
+        if (r.duration) {
+          info += (info ? " &middot; " : "") + formatDuration(r.duration);
+          totalMins += r.duration / 60;
+        }
         var costHtml = "";
-        if (r.api_cost != null && r.duration) {
-          var revenue = (r.duration / 60) * 0.50;
-          costHtml = ' &middot; <span class="cost-green">cost $' + r.api_cost.toFixed(2) + '</span>' +
-            ' &middot; <span class="cost-blue">revenue $' + revenue.toFixed(2) + '</span>';
+        if (r.duration) {
+          var userCost = (r.duration / 60) * RATE_PER_MIN;
+          costHtml = ' &middot; <span class="cost-green">$' + userCost.toFixed(2) + '</span>';
         }
         var linksHtml;
         if (isNotes) {
@@ -1219,6 +1229,15 @@ HTML_PAGE = """\
         '</div>';
       }
       recList.innerHTML = html;
+      var summaryEl = document.getElementById("usage-summary");
+      if (totalMins > 0) {
+        var totalCost = totalMins * RATE_PER_MIN;
+        document.getElementById("usage-total-mins").textContent = Math.round(totalMins) + " minutes total";
+        document.getElementById("usage-total-cost").textContent = "$" + totalCost.toFixed(2);
+        summaryEl.style.display = "block";
+      } else {
+        summaryEl.style.display = "none";
+      }
     }).catch(function() {});
   }
 
