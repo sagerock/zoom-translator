@@ -1318,10 +1318,25 @@ def make_on_utterance(session: BotSession):
     """Create an utterance callback bound to a specific bot session."""
     async def on_utterance(participant_id: str, text: str) -> None:
         target_lang = session.target_lang
+        speaker = session.participant_names.get(participant_id, participant_id[:8])
+
+        # Always record transcript, even if translation/TTS fails
+        elapsed = time.time() - session.recording_start if session.recording_start else 0
+        transcript_entry = {
+            "elapsed": round(elapsed, 2),
+            "speaker": speaker,
+            "text": text,
+        }
+
         session.deepl_chars += len(text)
         translated = await translate(text, target_lang)
         if translated is None:
+            transcript_entry["translated"] = None
+            session.transcript_buffer += json.dumps(transcript_entry, ensure_ascii=False) + "\n"
             return
+
+        transcript_entry["translated"] = translated
+        session.transcript_buffer += json.dumps(transcript_entry, ensure_ascii=False) + "\n"
 
         session.tts_chars += len(translated)
         mp3_b64 = await synthesize(translated, target_lang)
@@ -1474,12 +1489,46 @@ async def recall_handler(ws: ServerConnection) -> None:
     except websockets.exceptions.ConnectionClosed:
         log.info("Recall.ai WebSocket closed from %s", remote)
     finally:
-        # Tear down ASR streams for this session
+        # Tear down ASR streams and finalize session
         if session:
             for pid in list(session.asr_streams):
                 stream = session.asr_streams.pop(pid, None)
                 if stream:
                     await stream.close()
+
+            # If session wasn't already stopped via management UI, finalize it now
+            if session.status != "stopped":
+                log.info("Finalizing session %s after WebSocket disconnect", session.bot_id)
+                session.status = "stopped"
+                await broadcast_status()
+
+                if session.transcript_buffer:
+                    asyncio.create_task(supabase_client.upload_text_file(
+                        session.user_id, session.bot_id, "transcript.jsonl", session.transcript_buffer
+                    ))
+
+                if session.srt_buffer:
+                    asyncio.create_task(supabase_client.upload_text_file(
+                        session.user_id, session.bot_id, "subtitles.srt", session.srt_buffer
+                    ))
+
+                if session.mode in ("notes", "both") and session.transcript_buffer:
+                    await _generate_meeting_summary(session)
+
+                meeting_minutes = (time.time() - session.recording_start) / 60.0 if session.recording_start else 0
+                costs = _calculate_costs(session, meeting_minutes)
+                log.info(
+                    "Session costs for %s (auto-finalized): total=$%.2f",
+                    session.bot_id[:8], costs["total"],
+                )
+                duration = meeting_minutes * 60 if session.mode in ("notes", "both") else session.audio_offset
+                asyncio.create_task(supabase_client.update_session_status(
+                    session.bot_id, "stopped",
+                    clip_count=session.clip_count,
+                    duration=round(duration, 1),
+                    api_cost=round(costs["total"], 4),
+                ))
+                bot_sessions.pop(session.bot_id, None)
 
 
 # ── Main handler with path routing ────────────────────────────────────
