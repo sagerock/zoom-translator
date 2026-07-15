@@ -136,18 +136,33 @@ async def _generate_meeting_summary(session: BotSession) -> None:
         resp = await _anthropic.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            system=(
-                "You are a meeting notes assistant. Summarize the following meeting transcript. "
-                "Include:\n"
-                "1. **Summary** — A concise overview of what was discussed\n"
-                "2. **Key Discussion Points** — The main topics covered\n"
-                "3. **Decisions Made** — Any decisions that were reached\n"
-                "4. **Action Items** — Tasks assigned, with owners if mentioned\n"
-                "5. **Follow-ups** — Anything that needs further discussion\n\n"
-                "Use markdown formatting. Be concise but thorough."
-            ),
+            # The transcript lives in a cached system block with the exact same
+            # text as the Q&A endpoint's first block, so this summary call warms
+            # the cache and follow-up questions read the transcript at ~10% of
+            # input price. (Caching engages once the transcript exceeds the
+            # ~2K-token minimum; markers on shorter ones are harmless no-ops.)
+            system=[
+                {
+                    "type": "text",
+                    "text": "Here is a meeting transcript:\n\n" + transcript_text,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "You are a meeting notes assistant. Summarize the meeting transcript above. "
+                        "Include:\n"
+                        "1. **Summary** — A concise overview of what was discussed\n"
+                        "2. **Key Discussion Points** — The main topics covered\n"
+                        "3. **Decisions Made** — Any decisions that were reached\n"
+                        "4. **Action Items** — Tasks assigned, with owners if mentioned\n"
+                        "5. **Follow-ups** — Anything that needs further discussion\n\n"
+                        "Use markdown formatting. Be concise but thorough."
+                    ),
+                },
+            ],
             messages=[
-                {"role": "user", "content": transcript_text},
+                {"role": "user", "content": "Please summarize the meeting."},
             ],
         )
 
@@ -1195,12 +1210,24 @@ async def _handle_ask(ws: ServerConnection, msg: dict, user_id: str, admin: bool
         resp = await _anthropic.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
-            system=(
-                "You are a helpful assistant that answers questions about a meeting. "
-                "Here is the meeting transcript:\n\n" + transcript_text + "\n\n"
-                "Answer the user's question based on the transcript. Be concise and specific. "
-                "If the answer isn't in the transcript, say so."
-            ),
+            # First block matches the summary call byte-for-byte, so repeat
+            # questions (and the first question within 5 min of the summary)
+            # read the cached transcript instead of re-billing it in full.
+            system=[
+                {
+                    "type": "text",
+                    "text": "Here is a meeting transcript:\n\n" + transcript_text,
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "You are a helpful assistant that answers questions about the meeting. "
+                        "Answer the user's question based on the transcript above. Be concise "
+                        "and specific. If the answer isn't in the transcript, say so."
+                    ),
+                },
+            ],
             messages=[
                 {"role": "user", "content": question},
             ],
